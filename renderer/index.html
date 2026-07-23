@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>SerpDesk</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="logo">
+        <div class="logo-mark">S</div>
+        <div>
+          <div class="logo-name">SerpDesk</div>
+          <div class="logo-sub">съёмщик позиций</div>
+        </div>
+      </div>
+      <div class="proj-list" id="projList"></div>
+      <button class="btn btn-ghost btn-new" id="btnNewProject">+ Новый проект</button>
+      <button class="author-link" id="btnTelegram" title="Telegram автора">✈ @kakao_seo</button>
+      <div class="sidebar-footer">
+        <div class="balance" id="balanceBox" title="Баланс XMLRiver — нажмите, чтобы открыть журнал расходов">—</div>
+        <button class="icon-btn" id="btnSettings" title="Настройки">⚙</button>
+      </div>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <div id="modalRoot"></div>
+  <div id="toastRoot"></div>
+  <datalist id="lrList">
+    <option value="213">Москва</option>
+    <option value="1">Москва и область</option>
+    <option value="2">Санкт-Петербург</option>
+    <option value="65">Новосибирск</option>
+    <option value="54">Екатеринбург</option>
+    <option value="43">Казань</option>
+    <option value="47">Нижний Новгород</option>
+    <option value="62">Красноярск</option>
+    <option value="35">Краснодар</option>
+    <option value="39">Ростов-на-Дону</option>
+    <option value="51">Самара</option>
+    <option value="66">Омск</option>
+    <option value="56">Челябинск</option>
+    <option value="193">Воронеж</option>
+    <option value="172">Уфа</option>
+    <option value="50">Пермь</option>
+    <option value="38">Волгоград</option>
+    <option value="194">Саратов</option>
+    <option value="55">Тюмень</option>
+    <option value="63">Иркутск</option>
+    <option value="157">Минск</option>
+    <option value="162">Алматы</option>
+    <option value="163">Астана</option>
+    <option value="0">Россия (без региона)</option>
+  </datalist>
+  <script src="app.js"></script>
+</body>
+</html>

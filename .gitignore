@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite.*
+*.log
+.DS_Store
+
+# Ключи и локальные конфигурации с секретами
+*.json.key
+mcp-*.json
+*-serviceaccount*.json

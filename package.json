@@ -1,0 +1,93 @@
+{
+  "name": "serpdesk",
+  "productName": "SerpDesk",
+  "version": "1.5.0",
+  "description": "Съёмщик позиций Яндекс/Google через XMLRiver API",
+  "main": "main.js",
+  "author": "Fairf",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/parse.test.js && node test/import-history.test.js && node test/analytics-costs.test.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist": "electron-builder --mac --win",
+    "publish": "electron-builder --mac --win --publish always"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "fast-xml-parser": "^4.5.0",
+    "sql.js": "^1.13.0",
+    "xlsx": "^0.18.5"
+  },
+  "build": {
+    "appId": "ru.fairf.serpdesk",
+    "productName": "SerpDesk",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "renderer/**",
+      "assets/**",
+      "node_modules/**"
+    ],
+    "asarUnpack": [
+      "node_modules/sql.js/dist/**",
+      "assets/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-win-x64-setup.${ext}",
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-win-x64-portable.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Fairfaks",
+        "repo": "serpdesk"
+      }
+    ]
+  }
+}
