@@ -190,8 +190,8 @@ async function loadGrid() {
   S.grid = await window.api.getGrid({ projectId: S.activeId, engine: S.engine, device: S.device, limit: 20 });
   S.virtual.rowStart = 0;
   S.virtual.scrollTop = 0;
-  S.virtual.colStart = Math.max(0, (S.grid.runs?.length || 0) - S.virtual.colWindow);
-  S.virtual.scrollLeft = Number.MAX_SAFE_INTEGER;
+  S.virtual.colStart = 0;
+  S.virtual.scrollLeft = 0;
 }
 
 async function loadOlderHistory() {
@@ -217,8 +217,8 @@ async function loadOlderHistory() {
       cells,
       pagination: older.pagination,
     };
-    S.virtual.colStart = Math.max(0, S.grid.runs.length - S.virtual.colWindow);
-    S.virtual.scrollLeft = Number.MAX_SAFE_INTEGER;
+    S.virtual.colStart = 0;
+    S.virtual.scrollLeft = 0;
     renderMain();
   } catch (e) {
     toast(e.message.replace(/^.*Error: /, ''), 'err');
@@ -290,6 +290,10 @@ function setSort(key, runId = null) {
     s.runId = runId;
     s.dir = (key === 'freq' || key === 'shows' || key === 'clicks') ? -1 : 1; // объёмные метрики — по убыванию
   }
+  if (key === 'phrase') {
+    S.virtual.colStart = 0;
+    S.virtual.scrollLeft = 0;
+  }
   refreshGrid();
 }
 
@@ -308,13 +312,57 @@ function render() {
 
 function renderSidebar() {
   const list = $('#projList');
-  list.innerHTML = S.projects.map((p) => `
-    <div class="proj-item ${p.id === S.activeId ? 'active' : ''}" data-id="${p.id}">
-      <div class="p-name">${p.running ? '<span class="run-dot"></span>' : ''}${esc(p.name)}</div>
-      <div class="p-domain">${esc(p.domain)}</div>
-      <div class="p-count">${p.keywordCount}</div>
-    </div>
+  const storageKey = (domain) => `projectGroupCollapsed:${String(domain || '').trim().toLowerCase()}`;
+  const projectLabel = (project) => {
+    const name = String(project.name || '').trim();
+    const domain = String(project.domain || '').trim();
+    if (!domain || !name.toLowerCase().startsWith(domain.toLowerCase())) return name;
+    const suffix = name.slice(domain.length).replace(/^[\s\-–—]+/, '').trim();
+    return suffix || name;
+  };
+  const grouped = new Map();
+  for (const project of S.projects) {
+    const rawDomain = String(project.domain || '').trim();
+    const key = rawDomain.toLowerCase();
+    if (!grouped.has(key)) grouped.set(key, { domain: rawDomain || 'Без домена', projects: [] });
+    grouped.get(key).projects.push(project);
+  }
+  const groups = [...grouped.values()]
+    .sort((a, b) => a.domain.localeCompare(b.domain, 'ru', { sensitivity: 'base' }))
+    .map((group) => ({
+      ...group,
+      collapsed: localStorage.getItem(storageKey(group.domain)) === '1',
+      projects: group.projects.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru', { sensitivity: 'base' })),
+    }));
+
+  list.innerHTML = groups.map((group, index) => `
+    <section class="proj-group ${group.collapsed ? 'collapsed' : ''}">
+      <button class="proj-group-head" type="button" data-group="${index}" aria-expanded="${group.collapsed ? 'false' : 'true'}">
+        <span class="proj-group-arrow">${group.collapsed ? '▸' : '▾'}</span>
+        <span class="proj-group-domain" title="${esc(group.domain)}">${esc(group.domain)}</span>
+        <span class="proj-group-count">${group.projects.length}</span>
+      </button>
+      <div class="proj-group-items">
+        ${group.projects.map((p) => `
+          <div class="proj-item ${p.id === S.activeId ? 'active' : ''}" data-id="${p.id}">
+            <div class="p-name">
+              ${p.running ? '<span class="run-dot"></span>' : ''}
+              <span class="p-label" title="${esc(p.name)}">${esc(projectLabel(p))}</span>
+              <span class="p-count" title="Фраз в проекте">${p.keywordCount}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </section>
   `).join('');
+  list.querySelectorAll('.proj-group-head').forEach((el) => {
+    el.onclick = () => {
+      const group = groups[Number(el.dataset.group)];
+      if (!group) return;
+      localStorage.setItem(storageKey(group.domain), group.collapsed ? '0' : '1');
+      renderSidebar();
+    };
+  });
   list.querySelectorAll('.proj-item').forEach((el) => {
     el.onclick = async () => {
       S.activeId = Number(el.dataset.id);
@@ -687,13 +735,14 @@ function renderGrid() {
     </div>`;
   }
   const runs = g.runs;
+  const displayRuns = runs.slice().reverse();
   const kws = visibleKeywords();
   const rowStart = Math.max(0, Math.min(S.virtual.rowStart, Math.max(0, kws.length - 1)));
   const rowEnd = Math.min(kws.length, rowStart + S.virtual.rowWindow);
   const visibleKws = kws.slice(rowStart, rowEnd);
-  const colStart = Math.max(0, Math.min(S.virtual.colStart, Math.max(0, runs.length - 1)));
-  const colEnd = Math.min(runs.length, colStart + S.virtual.colWindow);
-  const visibleRuns = runs.slice(colStart, colEnd);
+  const colStart = Math.max(0, Math.min(S.virtual.colStart, Math.max(0, displayRuns.length - 1)));
+  const colEnd = Math.min(displayRuns.length, colStart + S.virtual.colWindow);
+  const visibleRuns = displayRuns.slice(colStart, colEnd);
   const runIndexes = new Map(runs.map((run, index) => [run.id, index]));
   const colSpacer = (count, tag = 'td') => count > 0
     ? `<${tag} class="v-col-space" style="width:${count * 72}px;min-width:${count * 72}px"></${tag}>`
@@ -717,7 +766,7 @@ function renderGrid() {
       <th class="h-stat" data-sort="realpos" title="${esc(statTip)} — средняя позиция по реальным показам">Поз.ПС${sortArrow('realpos')}</th>` : ''}
     ${colSpacer(colStart, 'th')}
     ${visibleRuns.map((r) => `<th data-sort="run" data-run="${r.id}" title="${esc(fmtDateFull(r.started_at))}${r.status !== 'done' ? ' · ' + r.status : ''}">${fmtDate(r.started_at)}${sortArrow('run', r.id)}</th>`).join('')}
-    ${colSpacer(runs.length - colEnd, 'th')}
+    ${colSpacer(displayRuns.length - colEnd, 'th')}
   </tr>`;
 
   const rows = visibleKws.map((kw) => {
@@ -768,7 +817,7 @@ function renderGrid() {
       })() : ''}
       ${colSpacer(colStart)}
       ${tds}
-      ${colSpacer(runs.length - colEnd)}
+      ${colSpacer(displayRuns.length - colEnd)}
     </tr>`;
   }).join('');
 
@@ -777,7 +826,7 @@ function renderGrid() {
     : '';
 
   const staticColumns = 1 + (hasFreq ? 1 : 0) + (hasStats ? 3 : 0);
-  const totalColumns = staticColumns + visibleRuns.length + (colStart > 0 ? 1 : 0) + (colEnd < runs.length ? 1 : 0);
+  const totalColumns = staticColumns + visibleRuns.length + (colStart > 0 ? 1 : 0) + (colEnd < displayRuns.length ? 1 : 0);
   const topSpacer = rowStart > 0
     ? `<tr class="v-row-space"><td colspan="${totalColumns}" style="height:${rowStart * S.virtual.rowHeight}px"></td></tr>`
     : '';
