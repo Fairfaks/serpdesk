@@ -2098,7 +2098,9 @@ window.api.on('focus:project', async (e) => {
 });
 
 window.api.on('update:status', (e) => {
-  if (e.state === 'available') toast(`Доступно обновление ${e.version} — скачиваю…`);
+  if (e.state === 'available') toast(e.manualDownload
+    ? `Доступно обновление ${e.version} — откройте страницу скачивания`
+    : `Доступно обновление ${e.version} — скачиваю…`);
   else if (e.state === 'downloaded') toast(`Обновление ${e.version} загружено`, 'ok');
   else if (e.state === 'none') toast('У вас последняя версия', 'ok');
   else if (e.state === 'error') toast('Проверка обновлений: ' + e.message, 'err');

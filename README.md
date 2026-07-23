@@ -32,15 +32,15 @@ API [XMLRiver](https://xmlriver.com), история в SQLite, цветная �
 - **Мобайл + десктоп** (opt-in) — режим устройства на проект (десктоп / мобайл / оба); при «оба» снимаются обе выдачи, в шапке — переключатель 🖥/📱.
 - **Отчёт** — кнопка «Отчёт»: цветная сетка + KPI в отдельном окне, «Сохранить PDF / Печать».
 - **Перенос базы** — в настройках экспорт/импорт всей базы одним .sqlite (Mac↔Windows).
-- **Автообновления** — electron-updater + GitHub Releases; проверка при старте и в меню. Настройка — [docs/AUTOUPDATE.md](docs/AUTOUPDATE.md).
+- **Обновления с GitHub** — проверка при старте и в меню; Windows устанавливает обновление автоматически, неподписанная macOS-сборка открывает страницу скачивания. Для полной автоустановки на Mac нужен Apple Developer ID. Подробности — [docs/AUTOUPDATE.md](docs/AUTOUPDATE.md).
 
 ## Дистрибутивы (папка `dist/`)
 
 | Файл | Платформа |
 |---|---|
-| `SerpDesk-1.5.1-mac-arm64.dmg` | macOS (Apple Silicon) |
-| `SerpDesk-1.5.1-win-x64-setup.exe` | Windows-инсталлятор |
-| `SerpDesk-1.5.1-win-x64-portable.exe` | Windows portable (без установки) |
+| `SerpDesk-1.5.2-mac-arm64.dmg` | macOS (Apple Silicon) |
+| `SerpDesk-1.5.2-win-x64-setup.exe` | Windows-инсталлятор |
+| `SerpDesk-1.5.2-win-x64-portable.exe` | Windows portable (без установки) |
 
 Сборки не подписаны сертификатами: macOS при первом запуске скачанного файла может
 попросить «Открыть» через правый клик; Windows SmartScreen — «Выполнить в любом случае».

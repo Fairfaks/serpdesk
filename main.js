@@ -3,6 +3,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 const DB = require('./lib/db');
 const xmlriver = require('./lib/xmlriver');
 const gsc = require('./lib/gsc');
@@ -15,25 +16,65 @@ const { CheckRunner } = require('./lib/checker');
 // ---------- автообновления (electron-updater + GitHub Releases) ----------
 // Работает только в собранном приложении при заданном build.publish в package.json.
 // В dev и без релизов молча ничего не делает.
+let updaterClient = null;
+let updaterBound = false;
+let updaterManualCheck = false;
+
+function canInstallMacUpdate() {
+  if (process.platform !== 'darwin' || !app.isPackaged) return true;
+  const bundlePath = path.resolve(app.getPath('exe'), '../../..');
+  const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', bundlePath], { encoding: 'utf8' });
+  const details = `${result.stdout || ''}\n${result.stderr || ''}`;
+  return result.status === 0 && /TeamIdentifier=(?!not set(?:\s|$))\S+/.test(details);
+}
+
 function initUpdater(manual) {
-  let autoUpdater;
-  try { ({ autoUpdater } = require('electron-updater')); } catch { return; }
   if (!app.isPackaged && !manual) return;
-  autoUpdater.autoDownload = true;
-  autoUpdater.on('update-available', (info) => send('update:status', { state: 'available', version: info.version }));
-  autoUpdater.on('update-not-available', () => { if (manual) send('update:status', { state: 'none' }); });
-  autoUpdater.on('error', (err) => { if (manual) send('update:status', { state: 'error', message: String(err && err.message || err) }); });
-  autoUpdater.on('update-downloaded', async (info) => {
-    send('update:status', { state: 'downloaded', version: info.version });
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'info',
-      buttons: ['Перезапустить сейчас', 'Позже'],
-      defaultId: 0,
-      title: 'Обновление SerpDesk',
-      message: `Версия ${info.version} загружена. Перезапустить, чтобы установить?`,
+  if (!updaterClient) {
+    try { ({ autoUpdater: updaterClient } = require('electron-updater')); } catch { return; }
+  }
+  const autoUpdater = updaterClient;
+  const automaticInstall = canInstallMacUpdate();
+  autoUpdater.autoDownload = automaticInstall;
+  updaterManualCheck = Boolean(manual);
+
+  if (!updaterBound) {
+    autoUpdater.on('update-available', async (info) => {
+      const canInstall = canInstallMacUpdate();
+      send('update:status', { state: 'available', version: info.version, manualDownload: !canInstall });
+      updaterManualCheck = false;
+      if (canInstall) return;
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        buttons: ['Открыть страницу скачивания', 'Позже'],
+        defaultId: 0,
+        title: 'Доступно обновление SerpDesk',
+        message: `Версия ${info.version} доступна на GitHub.`,
+        detail: 'Эта сборка для macOS не подписана сертификатом Apple, поэтому система не разрешает установить обновление автоматически.',
+      });
+      if (response === 0) shell.openExternal('https://github.com/Fairfaks/serpdesk/releases/latest');
     });
-    if (response === 0) autoUpdater.quitAndInstall();
-  });
+    autoUpdater.on('update-not-available', () => {
+      if (updaterManualCheck) send('update:status', { state: 'none' });
+      updaterManualCheck = false;
+    });
+    autoUpdater.on('error', (err) => {
+      if (updaterManualCheck) send('update:status', { state: 'error', message: String(err && err.message || err) });
+      updaterManualCheck = false;
+    });
+    autoUpdater.on('update-downloaded', async (info) => {
+      send('update:status', { state: 'downloaded', version: info.version });
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        buttons: ['Перезапустить сейчас', 'Позже'],
+        defaultId: 0,
+        title: 'Обновление SerpDesk',
+        message: `Версия ${info.version} загружена. Перезапустить, чтобы установить?`,
+      });
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+    updaterBound = true;
+  }
   autoUpdater.checkForUpdates().catch((e) => { if (manual) send('update:status', { state: 'error', message: String(e && e.message || e) }); });
 }
 

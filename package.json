@@ -1,7 +1,7 @@
 {
   "name": "serpdesk",
   "productName": "SerpDesk",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Съёмщик позиций Яндекс/Google через XMLRiver API",
   "main": "main.js",
   "author": "Fairf",
