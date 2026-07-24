@@ -40,12 +40,18 @@ API [XMLRiver](https://xmlriver.com), история в SQLite, цветная �
 
 | Файл | Платформа |
 |---|---|
-| `SerpDesk-1.5.3-mac-arm64.dmg` | macOS (Apple Silicon) |
-| `SerpDesk-1.5.3-win-x64-setup.exe` | Windows-инсталлятор |
-| `SerpDesk-1.5.3-win-x64-portable.exe` | Windows portable (без установки) |
+| `SerpDesk-1.5.4-mac-arm64.dmg` | macOS (Apple Silicon) |
+| `SerpDesk-1.5.4-win-x64-setup.exe` | Windows-инсталлятор |
+| `SerpDesk-1.5.4-win-x64-portable.exe` | Windows portable (без установки) |
 
 Сборки не подписаны сертификатами: macOS при первом запуске скачанного файла может
-попросить «Открыть» через правый клик; Windows SmartScreen — «Выполнить в любом случае».
+сообщить, что приложение повреждено. В таком случае сначала перетащите SerpDesk в
+«Программы». Затем откройте **Терминал**, напечатайте `zsh` и пробел, перетащите
+в его окно файл **«Разблокировать SerpDesk.command»** из DMG и нажмите Enter.
+Двойной клик по загруженному `.command` Finder блокирует, поэтому в DMG также
+лежит текстовая пошаговая инструкция. Помощник проверяет идентификатор приложения
+и снимает карантин только с SerpDesk. Windows SmartScreen может потребовать выбрать
+«Выполнить в любом случае».
 
 ## Источники данных (и их цена)
 
