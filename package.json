@@ -1,7 +1,7 @@
 {
   "name": "serpdesk",
   "productName": "SerpDesk",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Съёмщик позиций Яндекс/Google через XMLRiver API",
   "main": "main.js",
   "author": "Fairf",
@@ -56,6 +56,40 @@
         }
       ],
       "category": "public.app-category.productivity"
+    },
+    "dmg": {
+      "backgroundColor": "#171a20",
+      "window": {
+        "width": 720,
+        "height": 500
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 150,
+          "type": "file",
+          "name": "SerpDesk.app"
+        },
+        {
+          "x": 580,
+          "y": 150,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 150,
+          "y": 360,
+          "type": "file",
+          "path": "build/Инструкция при блокировке.txt"
+        },
+        {
+          "x": 560,
+          "y": 360,
+          "type": "file",
+          "path": "build/open-serpdesk.command",
+          "name": "Разблокировать SerpDesk.command"
+        }
+      ]
     },
     "win": {
       "target": [
