@@ -56,11 +56,13 @@ if (!window.api) {
     pickImportFile: async () => ({ canceled: true }),
     importHistory: async () => ({ phrases: 0, dates: 0, values: 0 }),
     deleteKeywords: async () => ({ ok: true }),
+    copyText: async () => ({ ok: true }),
     setKeywordTarget: async () => ({ ok: true }),
     collectFreq: async () => ({ started: false }),
     estimateCheck: async () => ({ keywordCount: demoKws.length, requests: demoKws.length, cost: 4.6, balance: 1234.56, details: [] }),
     listRequestLogs: async () => [],
     openTelegram: async () => ({ ok: true }),
+    openExternalUrl: async () => ({ ok: true }),
     getGrid: async () => {
       const compPos = {};
       demoKws.forEach((k, i) => {
@@ -106,6 +108,7 @@ const S = {
   dyn: { metric: 'top', tops: { 3: true, 10: true, 30: true } }, // состояние графиков «Динамики»
   cmp: { a: null, b: null },                                     // выбранные прогоны для «Сравнения»
   historyLoading: false,
+  selectedKeywordIds: new Set(),
   virtual: {
     rowStart: 0,
     rowHeight: 38,
@@ -169,6 +172,7 @@ function normUrl(u) {
 async function loadProjects(keepActive = true) {
   S.projects = await window.api.listProjects();
   if (!keepActive || !activeProject()) {
+    S.selectedKeywordIds.clear();
     const saved = Number(localStorage.getItem('activeId'));
     S.activeId = S.projects.some((p) => p.id === saved) ? saved : (S.projects[0]?.id ?? null);
   }
@@ -188,6 +192,8 @@ function syncEngineToProject() {
 async function loadGrid() {
   if (!S.activeId) { S.grid = null; return; }
   S.grid = await window.api.getGrid({ projectId: S.activeId, engine: S.engine, device: S.device, limit: 20 });
+  const keywordIds = new Set((S.grid.keywords || []).map((keyword) => keyword.id));
+  S.selectedKeywordIds = new Set([...S.selectedKeywordIds].filter((id) => keywordIds.has(id)));
   S.virtual.rowStart = 0;
   S.virtual.scrollTop = 0;
   S.virtual.colStart = 0;
@@ -366,6 +372,7 @@ function renderSidebar() {
   list.querySelectorAll('.proj-item').forEach((el) => {
     el.onclick = async () => {
       S.activeId = Number(el.dataset.id);
+      S.selectedKeywordIds.clear();
       localStorage.setItem('activeId', S.activeId);
       S.progress = null;
       S.freqProg = null;
@@ -538,21 +545,95 @@ function refreshGrid() {
   bindGridEvents();
 }
 
+async function copyKeywords(keywords) {
+  const phrases = keywords.map((keyword) => keyword.phrase).filter(Boolean);
+  if (!phrases.length) { toast('Нет запросов для копирования', 'err'); return; }
+  try {
+    await window.api.copyText({ text: phrases.join('\n') });
+    toast(`Скопировано запросов: ${phrases.length}`, 'ok');
+  } catch (e) {
+    toast(e.message.replace(/^.*Error: /, ''), 'err');
+  }
+}
+
+async function deleteKeywordIds(ids) {
+  const uniqueIds = [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!uniqueIds.length) return;
+  const one = uniqueIds.length === 1 ? S.grid.keywords.find((keyword) => keyword.id === uniqueIds[0]) : null;
+  const question = one
+    ? `Удалить фразу «${one.phrase}» вместе с историей?`
+    : `Удалить выбранные запросы (${uniqueIds.length}) вместе со всей их историей?`;
+  if (!confirm(question)) return;
+  try {
+    await window.api.deleteKeywords({ ids: uniqueIds });
+    uniqueIds.forEach((id) => S.selectedKeywordIds.delete(id));
+    await Promise.all([loadProjects(), loadGrid()]);
+    render();
+    toast(`Удалено запросов: ${uniqueIds.length}`, 'ok');
+  } catch (e) {
+    toast(e.message.replace(/^.*Error: /, ''), 'err');
+  }
+}
+
 function bindGridEvents() {
   const box = $('#gridBox');
   if (!box) return;
 
   box.querySelectorAll('.kw-del').forEach((el) => {
-    el.onclick = async (e) => {
+    el.onclick = (e) => {
       e.stopPropagation();
-      const id = Number(el.dataset.kw);
-      const kw = S.grid.keywords.find((k) => k.id === id);
-      if (!confirm(`Удалить фразу «${kw ? kw.phrase : id}» вместе с историей?`)) return;
-      await window.api.deleteKeywords({ ids: [id] });
-      await Promise.all([loadProjects(), loadGrid()]);
-      render();
+      deleteKeywordIds([Number(el.dataset.kw)]);
     };
   });
+
+  box.querySelectorAll('.kw-copy').forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const keyword = S.grid.keywords.find((item) => item.id === Number(el.dataset.kw));
+      if (keyword) copyKeywords([keyword]);
+    };
+  });
+
+  box.querySelectorAll('.kw-check').forEach((el) => {
+    el.onchange = (e) => {
+      e.stopPropagation();
+      const id = Number(el.dataset.kw);
+      if (el.checked) S.selectedKeywordIds.add(id);
+      else S.selectedKeywordIds.delete(id);
+      refreshGrid();
+    };
+  });
+
+  const selectAll = $('#kwSelectAll', box);
+  if (selectAll) {
+    const visibleIds = visibleKeywords().map((keyword) => keyword.id);
+    const selectedVisible = visibleIds.filter((id) => S.selectedKeywordIds.has(id)).length;
+    selectAll.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+    selectAll.onclick = (e) => e.stopPropagation();
+    selectAll.onchange = (e) => {
+      e.stopPropagation();
+      visibleIds.forEach((id) => {
+        if (selectAll.checked) S.selectedKeywordIds.add(id);
+        else S.selectedKeywordIds.delete(id);
+      });
+      refreshGrid();
+    };
+  }
+
+  const copyVisible = $('#btnCopyVisible', box);
+  if (copyVisible) copyVisible.onclick = () => copyKeywords(visibleKeywords());
+  const copySelected = $('#btnCopySelected', box);
+  if (copySelected) copySelected.onclick = () => {
+    copyKeywords(S.grid.keywords.filter((keyword) => S.selectedKeywordIds.has(keyword.id)));
+  };
+  const deleteSelected = $('#btnDeleteSelected', box);
+  if (deleteSelected) deleteSelected.onclick = () => deleteKeywordIds([...S.selectedKeywordIds]);
+  const clearSelected = $('#btnClearSelected', box);
+  if (clearSelected) clearSelected.onclick = () => {
+    S.selectedKeywordIds.clear();
+    refreshGrid();
+  };
 
   box.querySelectorAll('.kw-target').forEach((el) => {
     el.onclick = (e) => {
@@ -574,6 +655,21 @@ function bindGridEvents() {
     el.onclick = () => {
       const kw = S.grid.keywords.find((k) => k.id === Number(el.dataset.kw));
       if (kw) openChartModal(kw);
+    };
+  });
+
+  box.querySelectorAll('.pos.has-url').forEach((el) => {
+    const openUrl = async (e) => {
+      e.stopPropagation();
+      try { await window.api.openExternalUrl({ url: el.dataset.url }); }
+      catch (error) { toast(error.message.replace(/^.*Error: /, ''), 'err'); }
+    };
+    el.onclick = openUrl;
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openUrl(e);
+      }
     };
   });
 
@@ -756,9 +852,25 @@ function renderGrid() {
   const psName = S.engine === 'yandex' ? 'Яндекс.Вебмастера' : 'Search Console';
   const statTip = `Реальная статистика из ${psName} за ${psDays} дней${statAt ? ' · обновлено ' + fmtDateFull(statAt) : ''}. История копится с каждым «⟳ ПС» — смотри в графике фразы.`;
   const depth = activeProject().cfg.depth;
+  const selectedCount = S.selectedKeywordIds.size;
+  const filtered = kws.length !== g.keywords.length;
+  const bulkBar = `<div class="kw-bulkbar">
+    <span class="kw-bulk-summary">${selectedCount ? `Выбрано: <b>${selectedCount}</b>` : `Запросов: <b>${kws.length}</b>`}</span>
+    ${selectedCount ? `
+      <button class="btn" id="btnCopySelected">⧉ Копировать выбранные</button>
+      <button class="btn btn-danger" id="btnDeleteSelected">Удалить выбранные</button>
+      <button class="btn btn-ghost" id="btnClearSelected">Снять выделение</button>
+    ` : ''}
+    <button class="btn" id="btnCopyVisible">⧉ Копировать ${filtered ? 'видимые' : 'все'}</button>
+  </div>`;
 
   const head = `<tr>
-    <th class="h-phrase" data-sort="phrase">Фраза (${kws.length}${kws.length !== g.keywords.length ? ` из ${g.keywords.length}` : ''})${sortArrow('phrase')}</th>
+    <th class="h-phrase" data-sort="phrase">
+      <span class="kw-head">
+        <input type="checkbox" id="kwSelectAll" title="Выбрать все ${filtered ? 'видимые' : 'запросы'}">
+        <span>Фраза (${kws.length}${filtered ? ` из ${g.keywords.length}` : ''})${sortArrow('phrase')}</span>
+      </span>
+    </th>
     ${hasFreq ? `<th class="h-freq" data-sort="freq" title="Частотность Вордстат">Частота${sortArrow('freq')}</th>` : ''}
     ${hasStats ? `
       <th class="h-stat" data-sort="shows" title="${esc(statTip)}">Показы·${psDays}д${sortArrow('shows')}</th>
@@ -790,16 +902,20 @@ function renderGrid() {
       const urlChanged = c.p > 0 && c.u && pc && !pc.e && pc.p > 0 && pc.u && normUrl(pc.u) !== normUrl(c.u);
       if (urlChanged) d += '<small class="mark-change">◆</small>';
       const label = c.p === 0 ? '—' : c.p;
-      let tip = c.u ? c.u : (c.p === 0 ? 'Не найден в ТОП-' + depth : '');
+      const hasUrl = Boolean(c.p > 0 && c.u);
+      let tip = hasUrl ? `Открыть релевантную страницу:\n${c.u}` : (c.p === 0 ? 'Не найден в ТОП-' + depth : '');
       if (wrongTarget) tip += `\n⚠ Ранжируется не целевая страница.\nЦель: ${kw.target_url}`;
       if (urlChanged) tip += `\n◆ URL сменился, было: ${pc.u}`;
-      return `<td class="c-pos"><span class="pos ${bucketClass(c.p)}${wrongTarget ? ' wrong' : ''}" title="${esc(tip)}">${label}${d}</span></td>`;
+      return `<td class="c-pos"><span class="pos ${bucketClass(c.p)}${wrongTarget ? ' wrong' : ''}${hasUrl ? ' has-url' : ''}"
+        ${hasUrl ? `data-url="${esc(c.u)}" role="link" tabindex="0"` : ''} title="${esc(tip)}">${label}${d}${hasUrl ? '<small class="open-url">↗</small>' : ''}</span></td>`;
     }).join('');
-    return `<tr>
+    return `<tr class="${S.selectedKeywordIds.has(kw.id) ? 'selected' : ''}">
       <td class="c-phrase">
+        <input type="checkbox" class="kw-check" data-kw="${kw.id}" ${S.selectedKeywordIds.has(kw.id) ? 'checked' : ''} title="Выбрать запрос">
         <span class="ph-text" data-kw="${kw.id}" title="${esc(kw.phrase)}${kw.target_url ? '\nЦель: ' + esc(kw.target_url) : ''} — клик: график">${kw.target_url ? '<span class="t-mark" title="Задан целевой URL">⌖</span>' : ''}${esc(kw.phrase)}</span>
         ${kw.tag ? `<span class="kw-tag">${esc(kw.tag)}</span>` : ''}
         <span class="kw-icons">
+          <span class="kw-copy" data-kw="${kw.id}" title="Копировать запрос">⧉</span>
           <span class="kw-chart" data-kw="${kw.id}" title="График динамики">📈</span>
           <span class="kw-target" data-kw="${kw.id}" title="Целевой URL">⌖</span>
           <span class="kw-del" data-kw="${kw.id}" title="Удалить фразу">✕</span>
@@ -835,7 +951,7 @@ function renderGrid() {
     ? `<tr class="v-row-space"><td colspan="${totalColumns}" style="height:${bottomRows * S.virtual.rowHeight}px"></td></tr>`
     : '';
 
-  return `${renderHistoryPager()}<div class="grid-wrap"><table class="grid">
+  return `${bulkBar}${renderHistoryPager()}<div class="grid-wrap"><table class="grid">
     <thead>${head}</thead>
     <tbody>${topSpacer}${rows}${bottomSpacer}${emptyRuns}</tbody>
   </table></div>`;
@@ -1724,6 +1840,7 @@ function openProjectModal(p) {
       closeModal();
       await loadProjects(false);
       S.activeId = r.id;
+      S.selectedKeywordIds.clear();
       localStorage.setItem('activeId', S.activeId);
       syncEngineToProject();
       await loadGrid();
@@ -2089,6 +2206,7 @@ window.api.on('run:done', async (e) => {
 
 window.api.on('focus:project', async (e) => {
   if (!e || !S.projects.some((project) => project.id === e.projectId)) return;
+  if (S.activeId !== e.projectId) S.selectedKeywordIds.clear();
   S.activeId = e.projectId;
   if (e.engine) S.engine = e.engine;
   if (e.device) S.device = e.device;

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, Notification, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, Notification, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
@@ -932,12 +932,24 @@ function registerIpc() {
   });
 
   h('keywords:delete', ({ ids }) => {
-    for (const id of ids) {
+    const cleanIds = [...new Set((Array.isArray(ids) ? ids : [])
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0))];
+    for (const id of cleanIds) {
       db.run('DELETE FROM results WHERE keyword_id = ?', [id]);
+      db.run('DELETE FROM competitor_results WHERE keyword_id = ?', [id]);
       db.run('DELETE FROM ps_stats WHERE keyword_id = ?', [id]);
       db.run('DELETE FROM keywords WHERE id = ?', [id]);
     }
-    return { ok: true };
+    return { ok: true, deleted: cleanIds.length };
+  });
+
+  h('clipboard:write', ({ text }) => {
+    const value = String(text || '');
+    if (!value) throw new Error('Нет текста для копирования');
+    if (value.length > 10_000_000) throw new Error('Слишком большой объём текста');
+    clipboard.writeText(value);
+    return { ok: true, length: value.length };
   });
 
   h('psstats:refresh', async ({ projectId }) => refreshPsStats(projectId));
@@ -997,6 +1009,15 @@ function registerIpc() {
 
   h('app:open-telegram', () => {
     shell.openExternal('https://t.me/kakao_seo');
+    return { ok: true };
+  });
+
+  h('app:open-url', async ({ url }) => {
+    let parsed;
+    try { parsed = new URL(String(url || '')); }
+    catch { throw new Error('Некорректная ссылка'); }
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Разрешены только HTTP/HTTPS-ссылки');
+    await shell.openExternal(parsed.toString());
     return { ok: true };
   });
 
