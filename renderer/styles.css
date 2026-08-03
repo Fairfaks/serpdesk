@@ -383,6 +383,8 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 
 table.grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
 
+.grid tbody tr:not(.v-row-space) { height: 38px; }
+
 .grid th, .grid td {
   border-bottom: 1px solid var(--border-soft);
   padding: 0;
@@ -403,8 +405,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .grid thead th.h-phrase {
   position: sticky; left: 0; z-index: 4;
   text-align: left;
-  min-width: 280px;
-  max-width: 380px;
+  min-width: 420px;
+  max-width: 520px;
   border-left: 0;
 }
 
@@ -412,8 +414,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
   position: sticky; left: 0; z-index: 2;
   background: var(--panel);
   padding: 7px 10px;
-  min-width: 280px;
-  max-width: 380px;
+  min-width: 420px;
+  max-width: 520px;
   font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -444,6 +446,20 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 }
 .history-pager + .grid-wrap { margin-top: 10px; }
 
+.beta-warning {
+  margin: 10px 20px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(227, 179, 65, .35);
+  border-radius: 8px;
+  background: rgba(227, 179, 65, .07);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.beta-warning b { color: var(--yellow); }
+.beta-warning + .kw-bulkbar { padding-top: 7px; }
+.beta-check { color: var(--yellow); }
+
 .kw-bulkbar {
   display: flex;
   align-items: center;
@@ -473,6 +489,28 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.kw-sort-label { cursor: pointer; white-space: nowrap; }
+.kw-sort-label:hover { color: var(--text); }
+.kw-search-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+.kw-search-controls input {
+  width: 150px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--panel);
+}
+.kw-search-controls select {
+  width: 78px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  background: var(--panel);
 }
 .kw-check, #kwSelectAll {
   flex: none;
@@ -588,6 +626,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .grid thead th small { font-weight: 400; color: var(--muted2); font-size: 9.5px; }
 
 .mark-change { color: var(--orange); font-size: 9px !important; }
+.pos .beta-pos { color: var(--accent-h); font-size: 9px; }
 
 /* ---------- empty states ---------- */
 
@@ -655,6 +694,21 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .conn-result { font-size: 12px; }
 .conn-result.ok { color: var(--green-soft); }
 .conn-result.err { color: var(--red); }
+
+.backup-list { display: flex; flex-direction: column; gap: 7px; }
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.backup-row div { display: flex; flex-direction: column; gap: 2px; }
+.backup-row b { font-size: 12.5px; }
+.backup-row span { color: var(--muted2); font-size: 10.5px; }
 
 .import-summary {
   background: var(--bg);

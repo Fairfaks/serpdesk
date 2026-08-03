@@ -3,6 +3,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, Notification, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { spawnSync } = require('child_process');
 const DB = require('./lib/db');
 const xmlriver = require('./lib/xmlriver');
@@ -11,6 +12,8 @@ const yavm = require('./lib/yavm');
 const historyImport = require('./lib/import-history');
 const analytics = require('./lib/analytics');
 const costs = require('./lib/costs');
+const backups = require('./lib/backups');
+const diagnostics = require('./lib/diagnostics');
 const { CheckRunner } = require('./lib/checker');
 
 // ---------- автообновления (electron-updater + GitHub Releases) ----------
@@ -59,6 +62,7 @@ function initUpdater(manual) {
       updaterManualCheck = false;
     });
     autoUpdater.on('error', (err) => {
+      diagnosticLog('error', 'Update check failed', { message: String(err && err.message || err) });
       if (updaterManualCheck) send('update:status', { state: 'error', message: String(err && err.message || err) });
       updaterManualCheck = false;
     });
@@ -83,9 +87,24 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let win = null;
 let db = null;
+let diagnosticLogPath = null;
 const runners = new Map(); // projectId → CheckRunner
 
 const nowIso = () => new Date().toISOString();
+
+function diagnosticLog(level, message, meta) {
+  diagnostics.appendLog(diagnosticLogPath, level, message, meta);
+}
+
+process.on('unhandledRejection', (reason) => {
+  diagnosticLog('error', 'Unhandled promise rejection', {
+    message: String(reason && reason.message || reason),
+    stack: reason && reason.stack,
+  });
+});
+process.on('uncaughtExceptionMonitor', (error) => {
+  diagnosticLog('error', 'Uncaught exception', { message: error.message, stack: error.stack });
+});
 
 // ---------- настройки ----------
 
@@ -131,7 +150,7 @@ const DEFAULT_CFG = {
   deviceMode: 'desktop', // desktop | mobile | both
   psDays: 28,
   competitors: [],
-  yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api' },
+  yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false },
   google: { enabled: false, loc: '', country: '' },
 };
 
@@ -166,6 +185,7 @@ function engineCfg(project, engine, device) {
       yandexDomain: c.yandex.domain,
       yandexSource: c.yandex.source || 'api',
       apiDepth: c.depth,
+      serpFeaturesBeta: Boolean(c.yandex.serpFeaturesBeta),
       device: dev,
     };
   }
@@ -291,6 +311,9 @@ async function startCheck(projectId) {
     onResult: () => {},
   });
   runners.set(projectId, runner);
+  diagnosticLog('info', 'Position check started', {
+    projectId, engines, devices: projectDevices(project), keywords: keywords.length,
+  });
   send('run:state', { projectId, running: true });
 
   const devices = projectDevices(project);
@@ -323,8 +346,9 @@ async function startCheck(projectId) {
         );
         const requestsBefore = runner.requestsMade;
         runner.o.onResult = (eng, kwId, res) => {
-          db.run('INSERT INTO results(run_id, keyword_id, position, url, error) VALUES(?, ?, ?, ?, ?)', [
-            runId, kwId, res.position, res.url, res.error,
+          db.run('INSERT INTO results(run_id, keyword_id, position, url, error, visual_position, serp_features) VALUES(?, ?, ?, ?, ?, ?, ?)', [
+            runId, kwId, res.position, res.url, res.error, res.visualPosition ?? null,
+            res.serpFeatures ? JSON.stringify(res.serpFeatures) : null,
           ]);
           if (res.competitors) {
             for (const [domain, pos] of Object.entries(res.competitors)) {
@@ -344,6 +368,9 @@ async function startCheck(projectId) {
           if (e && e.name === 'Cancelled') status = 'cancelled';
           else { status = 'failed'; failMessage = e.message; }
         }
+        diagnosticLog(status === 'failed' ? 'error' : 'info', 'Search engine run finished', {
+          projectId, runId, engine, device, status, error: status === 'failed' ? failMessage : undefined,
+        });
         db.run('UPDATE runs SET finished_at = ?, status = ? WHERE id = ?', [nowIso(), status, runId]);
         const requests = runner.requestsMade - requestsBefore;
         const partCost = estimatePart?.pricePer1000 == null
@@ -363,6 +390,9 @@ async function startCheck(projectId) {
     }
     runners.delete(projectId);
     db.flush();
+    diagnosticLog(failMessage ? 'error' : 'info', 'Position check finished', {
+      projectId, requests: runner.requestsMade, cancelled: runner.cancelled, error: failMessage,
+    });
     send('run:state', { projectId, running: false });
     send('run:done', {
       projectId,
@@ -472,8 +502,9 @@ async function retryErrors(projectId, engine, device = 'desktop') {
     onResult: (eng, kwId, res) => {
       const row = errored.find((e) => e.id === kwId);
       if (row) {
-        db.run('UPDATE results SET position = ?, url = ?, error = ? WHERE id = ?', [
-          res.position, res.url, res.error, row.result_id,
+        db.run('UPDATE results SET position = ?, url = ?, error = ?, visual_position = ?, serp_features = ? WHERE id = ?', [
+          res.position, res.url, res.error, res.visualPosition ?? null,
+          res.serpFeatures ? JSON.stringify(res.serpFeatures) : null, row.result_id,
         ]);
       }
     },
@@ -667,11 +698,13 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
   if (runs.length) {
     const ids = runs.map((r) => r.id);
     const rows = db.all(
-      `SELECT run_id, keyword_id, position, url, error FROM results WHERE run_id IN (${ids.map(() => '?').join(',')})`,
+      `SELECT run_id, keyword_id, position, url, error, visual_position, serp_features FROM results WHERE run_id IN (${ids.map(() => '?').join(',')})`,
       ids
     );
     for (const r of rows) {
-      (cells[r.keyword_id] ||= {})[r.run_id] = { p: r.position, u: r.url, e: r.error };
+      let features = null;
+      try { features = r.serp_features ? JSON.parse(r.serp_features) : null; } catch {}
+      (cells[r.keyword_id] ||= {})[r.run_id] = { p: r.position, vp: r.visual_position, f: features, u: r.url, e: r.error };
     }
   }
   const stats = {};
@@ -828,15 +861,102 @@ function schedulerTick() {
     for (const pr of db.all('SELECT id FROM projects ORDER BY id')) {
       startCheck(pr.id).catch(() => {});
     }
-  } catch {
+  } catch (error) {
+    diagnosticLog('error', 'Automatic check scheduler failed', { message: error.message, stack: error.stack });
     // не роняем таймер
   }
+}
+
+// ---------- диагностический отчёт ----------
+
+function diagnosticSections() {
+  const userData = app.getPath('userData');
+  const dbPath = path.join(userData, 'serpdesk.sqlite');
+  const settings = getSettings();
+  const count = (table) => db.get(`SELECT COUNT(*) AS c FROM ${table}`)?.c || 0;
+  const database = {
+    file_size_bytes: fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0,
+    projects: count('projects'),
+    keywords: count('keywords'),
+    runs: count('runs'),
+    results: count('results'),
+    request_log_entries: count('request_log'),
+    running_checks: runners.size,
+  };
+  const connections = {
+    xmlriver_configured: Boolean(settings.xmlriver_user && settings.xmlriver_key),
+    yandex_webmaster_configured: Boolean(settings.yavm_token),
+    gsc_oauth_configured: Boolean(settings.gsc_client_id && settings.gsc_refresh_token),
+    gsc_service_account_configured: Boolean(settings.gsc_key_path),
+    concurrency: Number(settings.concurrency) || 3,
+    automatic_checks_enabled: settings.autocheck_enabled === '1',
+  };
+  const runSummary = db.all(
+    `SELECT engine, device, status, COUNT(*) AS count
+     FROM runs GROUP BY engine, device, status ORDER BY engine, device, status`
+  );
+  const recentRequests = db.all(
+    `SELECT project_id, run_id, kind, engine, device, requests, estimated_requests,
+            price_per_1000, estimated_cost, actual_cost, started_at, finished_at, status
+     FROM request_log ORDER BY started_at DESC, id DESC LIMIT 50`
+  );
+  const recentErrors = db.all(
+    `SELECT u.engine, u.device, u.status AS run_status, r.error,
+            COUNT(*) AS occurrences, MAX(u.started_at) AS last_at
+     FROM results r JOIN runs u ON u.id = r.run_id
+     WHERE r.error IS NOT NULL AND TRIM(r.error) <> ''
+     GROUP BY u.engine, u.device, u.status, r.error
+     ORDER BY last_at DESC LIMIT 50`
+  );
+  const backupList = backups.listBackups(dbPath).map(({ name, date, size }) => ({ name, date, size }));
+  return {
+    'Приложение и система': {
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      platform: process.platform,
+      architecture: process.arch,
+      os_release: os.release(),
+      os_version: typeof os.version === 'function' ? os.version() : null,
+      electron: process.versions.electron,
+      node: process.versions.node,
+      locale: app.getLocale(),
+    },
+    'Состояние базы': database,
+    'Подключения (только наличие, без реквизитов)': connections,
+    'Запуски по статусам': runSummary,
+    'Последние расходы XMLRiver': recentRequests,
+    'Последние ошибки результатов': recentErrors,
+    'Автоматические копии': backupList,
+    'Технический журнал': diagnostics.readLogTail(diagnosticLogPath) || 'Журнал пока пуст.',
+  };
+}
+
+async function exportDiagnostics() {
+  db.flush();
+  const stamp = new Date().toISOString().slice(0, 10);
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Сохранить диагностику SerpDesk',
+    defaultPath: `serpdesk-diagnostics-${stamp}.txt`,
+    filters: [{ name: 'Текстовый файл', extensions: ['txt'] }],
+  });
+  if (canceled || !filePath) return { saved: false };
+  const report = diagnostics.buildReport(diagnosticSections());
+  fs.writeFileSync(filePath, report, 'utf8');
+  diagnosticLog('info', 'Diagnostic report exported');
+  return { saved: true, filePath };
 }
 
 // ---------- IPC ----------
 
 function registerIpc() {
-  const h = (name, fn) => ipcMain.handle(name, async (_e, args) => fn(args || {}));
+  const h = (name, fn) => ipcMain.handle(name, async (_e, args) => {
+    try {
+      return await fn(args || {});
+    } catch (error) {
+      diagnosticLog('error', `IPC operation failed: ${name}`, { message: error.message, stack: error.stack });
+      throw error;
+    }
+  });
 
   h('settings:get', () => getSettings());
   h('settings:set', (patch) => { setSettings(patch); return getSettings(); });
@@ -1056,6 +1176,19 @@ function registerIpc() {
     return { imported: true };
   });
 
+  h('db:list-backups', () => backups.listBackups(path.join(app.getPath('userData'), 'serpdesk.sqlite')));
+
+  h('db:restore-backup', ({ name }) => {
+    const dbPath = path.join(app.getPath('userData'), 'serpdesk.sqlite');
+    db.flush();
+    const result = backups.restoreBackup(dbPath, name);
+    app.relaunch();
+    app.exit(0);
+    return result;
+  });
+
+  h('diagnostics:export', () => exportDiagnostics());
+
   h('app:version', () => app.getVersion());
 }
 
@@ -1188,6 +1321,9 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    diagnosticLog('error', 'Renderer process stopped', details);
+  });
 }
 
 function buildMenu() {
@@ -1214,11 +1350,22 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
-    db = await DB.open(path.join(app.getPath('userData'), 'serpdesk.sqlite'));
+    const dbPath = path.join(app.getPath('userData'), 'serpdesk.sqlite');
+    diagnosticLogPath = path.join(app.getPath('userData'), 'logs', 'serpdesk.log');
+    diagnosticLog('info', 'SerpDesk starting', {
+      version: app.getVersion(), platform: process.platform, architecture: process.arch, packaged: app.isPackaged,
+    });
+    try { backups.createDailyBackup(dbPath); }
+    catch (error) { diagnosticLog('error', 'Daily backup failed', { message: error.message, stack: error.stack }); }
+    db = await DB.open(dbPath);
     registerIpc();
     buildMenu();
     createWindow();
     setInterval(schedulerTick, 30000);
+    setInterval(() => {
+      try { db.flush(); backups.createDailyBackup(dbPath); }
+      catch (error) { diagnosticLog('error', 'Hourly database maintenance failed', { message: error.message, stack: error.stack }); }
+    }, 60 * 60 * 1000);
     setTimeout(() => initUpdater(false), 4000); // тихая проверка обновлений при старте
 
     app.on('activate', () => {
@@ -1231,6 +1378,7 @@ if (!gotLock) {
   });
 
   app.on('before-quit', () => {
+    diagnosticLog('info', 'SerpDesk stopping');
     for (const r of runners.values()) r.cancel();
     if (db) db.flush();
   });

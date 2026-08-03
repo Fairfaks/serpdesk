@@ -48,7 +48,7 @@ if (!window.api) {
     getBalance: async () => ({ ok: true, balance: 1234.56, costYandex: 28, costGoogle: 25 }),
     listProjects: async () => [{
       id: 1, name: 'Демо-проект', domain: 'example.ru', subdomains: true, keywordCount: demoKws.length, running: false,
-      cfg: { depth: 30, device: 'desktop', deviceMode: 'both', psDays: 28, competitors: ['rival-one.ru', 'rival-two.ru'], yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api' }, google: { enabled: true, loc: '', country: '' } },
+      cfg: { depth: 30, device: 'desktop', deviceMode: 'both', psDays: 28, competitors: ['rival-one.ru', 'rival-two.ru'], yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: true, loc: '', country: '' } },
     }],
     saveProject: async () => ({ id: 1 }),
     deleteProject: async () => ({ ok: true }),
@@ -78,6 +78,9 @@ if (!window.api) {
     cancelCheck: async () => ({ ok: true }),
     retryErrors: async () => ({ ok: true }),
     exportCsv: async () => ({ saved: false }),
+    listBackups: async () => [],
+    restoreBackup: async () => ({ restored: false }),
+    exportDiagnostics: async () => ({ saved: false }),
     refreshPsStats: async () => ({ yandex: { matched: 7, total: 8 }, google: { matched: 7, total: 8 }, days: 28 }),
     testPsAccess: async () => ({ yavm: { ok: true, hosts: 3 }, gsc: { ok: true, sites: 5 } }),
     psStatsHistory: async () => ([
@@ -104,7 +107,7 @@ const S = {
   progress: null,       // {engine, done, total, phrase, position}
   freqProg: null,       // {done, total}
   balance: null,
-  view: { q: '', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' },
+  view: { q: '', searchMode: 'contains', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' },
   dyn: { metric: 'top', tops: { 3: true, 10: true, 30: true } }, // состояние графиков «Динамики»
   cmp: { a: null, b: null },                                     // выбранные прогоны для «Сравнения»
   historyLoading: false,
@@ -112,13 +115,20 @@ const S = {
   virtual: {
     rowStart: 0,
     rowHeight: 38,
-    rowWindow: 36,
+    rowWindow: 64,
+    rowOverscan: 12,
     colStart: 0,
     colWindow: 14,
+    colOverscan: 2,
     scrollTop: 0,
     scrollLeft: 0,
   },
 };
+
+let visibleKeywordsCache = null;
+let gridMetaCache = null;
+let keywordSearchTimer = null;
+const PHRASE_COLUMN_WIDTH = 420;
 
 // CTR органики по позиции (усреднённая кривая Яндекс/Google) — для видимости и трафик-прогноза.
 const CTR_CURVE = [0, 0.30, 0.15, 0.10, 0.07, 0.05, 0.04, 0.032, 0.026, 0.021, 0.018];
@@ -165,6 +175,32 @@ function normUrl(u) {
   s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
   s = s.split('#')[0];
   return s.replace(/\/+$/, '');
+}
+
+const SERP_FEATURE_LABELS = {
+  ads_top: 'реклама сверху',
+  ads_bottom: 'реклама снизу',
+  ads_right: 'реклама справа',
+  scroller: 'товарная карусель',
+  offers: 'цены в магазинах',
+  news: 'новости',
+  knowledge_graph: 'граф знаний',
+  ai: 'обзор от ИИ',
+  images: 'картинки',
+  maps: 'карты',
+  market: 'Яндекс Маркет',
+  video: 'видео',
+  uslugi: 'Яндекс Услуги',
+  weather: 'погода',
+  related_discovery: 'популярное по теме',
+};
+
+function serpFeatureLabel(feature) {
+  if (!feature) return '';
+  if (feature.type === 'searchster' || feature.type === 'content') {
+    return SERP_FEATURE_LABELS[feature.name] || `колдунщик: ${feature.name || 'неизвестный'}`;
+  }
+  return SERP_FEATURE_LABELS[feature.type] || feature.type;
 }
 
 /* ============ загрузка данных ============ */
@@ -258,11 +294,22 @@ async function refreshBalance() {
 function visibleKeywords() {
   const g = S.grid;
   if (!g) return [];
-  const { q, tag, sort } = S.view;
+  const { q, searchMode = 'contains', tag, sort } = S.view;
+  const cached = visibleKeywordsCache;
+  if (cached &&
+      cached.grid === g &&
+      cached.engine === S.engine &&
+      cached.q === q &&
+      cached.searchMode === searchMode &&
+      cached.tag === tag &&
+      cached.sortKey === sort.key &&
+      cached.sortRunId === sort.runId &&
+      cached.sortDir === sort.dir) {
+    return cached.list;
+  }
   let list = g.keywords.slice();
   if (q) {
-    const needle = q.toLowerCase();
-    list = list.filter((k) => k.phrase.toLowerCase().includes(needle));
+    list = list.filter((k) => window.SerpDeskKeywordSearch.matches(k.phrase, q, searchMode));
   }
   if (tag !== null) {
     list = tag === '__none__' ? list.filter((k) => !k.tag) : list.filter((k) => k.tag === tag);
@@ -284,7 +331,31 @@ function visibleKeywords() {
     else if (sort.key === 'run' && sort.runId) d = cellRank(a, sort.runId) - cellRank(b, sort.runId);
     return d * sort.dir || a.phrase.localeCompare(b.phrase, 'ru');
   });
+  visibleKeywordsCache = {
+    grid: g,
+    engine: S.engine,
+    q,
+    searchMode,
+    tag,
+    sortKey: sort.key,
+    sortRunId: sort.runId,
+    sortDir: sort.dir,
+    list,
+  };
   return list;
+}
+
+function gridMeta() {
+  const g = S.grid;
+  if (!g) return { hasFreq: false, hasStats: false, statAt: null };
+  if (gridMetaCache && gridMetaCache.grid === g && gridMetaCache.engine === S.engine) return gridMetaCache;
+  const hasFreq = g.keywords.some((k) => k.freq !== null && k.freq !== undefined);
+  const hasStats = g.keywords.some((k) => g.stats && g.stats[k.id] && g.stats[k.id][S.engine]);
+  const statAt = hasStats
+    ? Object.values(g.stats).map((s) => s[S.engine]?.at).filter(Boolean).sort().pop()
+    : null;
+  gridMetaCache = { grid: g, engine: S.engine, hasFreq, hasStats, statAt };
+  return gridMetaCache;
 }
 
 function setSort(key, runId = null) {
@@ -376,7 +447,7 @@ function renderSidebar() {
       localStorage.setItem('activeId', S.activeId);
       S.progress = null;
       S.freqProg = null;
-      S.view = { q: '', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' };
+      S.view = { q: '', searchMode: 'contains', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' };
       S.cmp = { a: null, b: null };
       syncEngineToProject();
       await loadGrid();
@@ -458,7 +529,6 @@ function renderMain() {
           <button class="tab ${S.device === 'desktop' ? 'active' : ''}" data-dev="desktop">🖥 Десктоп</button>
           <button class="tab ${S.device === 'mobile' ? 'active' : ''}" data-dev="mobile">📱 Мобайл</button>
         </div>` : ''}
-        ${S.view.mode === 'grid' ? `<input type="text" class="search-input" id="kwSearch" placeholder="Поиск по фразам…" value="${esc(S.view.q)}">` : ''}
       </div>
       ${S.view.mode === 'grid' && tags.length ? `<div class="tag-chips">
         <button class="chip-btn ${S.view.tag === null ? 'on' : ''}" data-tag="">Все</button>
@@ -489,9 +559,6 @@ function renderMain() {
   };
   $('#btnCsv').onclick = doExport;
   $('#btnEditProj').onclick = () => openProjectModal(p);
-
-  const search = $('#kwSearch');
-  if (search) search.oninput = () => { S.view.q = search.value; refreshGrid(); };
 
   main.querySelectorAll('.vnav').forEach((b) => {
     b.onclick = () => {
@@ -538,10 +605,33 @@ function renderMain() {
   else if (S.view.mode === 'competitors') bindCompetitorEvents();
 }
 
-function refreshGrid() {
+function refreshGrid(options = {}) {
   const box = $('#gridBox');
   if (!box) return;
+  const keepSearchFocus = options.focusSearch || document.activeElement?.id === 'kwSearch';
   box.innerHTML = renderGrid();
+  bindGridEvents();
+  if (keepSearchFocus) {
+    const search = $('#kwSearch', box);
+    if (search) {
+      search.focus();
+      search.setSelectionRange(search.value.length, search.value.length);
+    }
+  }
+}
+
+function refreshVirtualGrid() {
+  const box = $('#gridBox');
+  const wrap = box && $('.grid-wrap', box);
+  if (!box || !wrap) { refreshGrid(); return; }
+
+  const template = document.createElement('template');
+  template.innerHTML = renderGrid();
+  const nextGrid = $('.grid', template.content);
+  const currentGrid = $('.grid', wrap);
+  if (!nextGrid || !currentGrid) { refreshGrid(); return; }
+
+  currentGrid.replaceWith(nextGrid);
   bindGridEvents();
 }
 
@@ -621,6 +711,36 @@ function bindGridEvents() {
     };
   }
 
+  const search = $('#kwSearch', box);
+  if (search) {
+    search.oninput = () => {
+      S.view.q = search.value;
+      clearTimeout(keywordSearchTimer);
+      keywordSearchTimer = setTimeout(() => {
+        S.virtual.rowStart = 0;
+        S.virtual.scrollTop = 0;
+        refreshGrid({ focusSearch: true });
+      }, 180);
+    };
+    search.onkeydown = (event) => {
+      if (event.key !== 'Escape' || !search.value) return;
+      event.preventDefault();
+      clearTimeout(keywordSearchTimer);
+      search.value = '';
+      S.view.q = '';
+      S.virtual.rowStart = 0;
+      S.virtual.scrollTop = 0;
+      refreshGrid({ focusSearch: true });
+    };
+  }
+  const searchMode = $('#kwSearchMode', box);
+  if (searchMode) searchMode.onchange = () => {
+    S.view.searchMode = searchMode.value;
+    S.virtual.rowStart = 0;
+    S.virtual.scrollTop = 0;
+    refreshGrid({ focusSearch: true });
+  };
+
   const copyVisible = $('#btnCopyVisible', box);
   if (copyVisible) copyVisible.onclick = () => copyKeywords(visibleKeywords());
   const copySelected = $('#btnCopySelected', box);
@@ -680,6 +800,9 @@ function bindGridEvents() {
       else setSort(kind);
     };
   });
+  box.querySelectorAll('.kw-sort-label[data-sort]').forEach((label) => {
+    label.onclick = () => setSort(label.dataset.sort);
+  });
 
   const empty = $('#btnEmptyKw');
   if (empty) empty.onclick = openKeywordsModal;
@@ -693,29 +816,40 @@ function bindGridEvents() {
     } else {
       wrap.scrollLeft = S.virtual.scrollLeft || 0;
     }
+    const rowCount = visibleKeywords().length;
+    const meta = gridMeta();
+    const fixedWidth = PHRASE_COLUMN_WIDTH + (meta.hasFreq ? 80 : 0) + (meta.hasStats ? 240 : 0);
     let scheduled = false;
     wrap.onscroll = () => {
       S.virtual.scrollTop = wrap.scrollTop;
       S.virtual.scrollLeft = wrap.scrollLeft;
-      const rows = visibleKeywords();
-      const nextRow = Math.max(0, Math.min(
-        Math.floor(wrap.scrollTop / S.virtual.rowHeight) - 6,
-        Math.max(0, rows.length - S.virtual.rowWindow)
-      ));
-      const fixedWidth = 280 +
-        (S.grid.keywords.some((k) => k.freq != null) ? 80 : 0) +
-        (S.grid.keywords.some((k) => S.grid.stats?.[k.id]?.[S.engine]) ? 240 : 0);
-      const nextCol = Math.max(0, Math.min(
-        Math.floor(Math.max(0, wrap.scrollLeft - fixedWidth) / 72) - 2,
-        Math.max(0, S.grid.runs.length - S.virtual.colWindow)
-      ));
-      if (nextRow === S.virtual.rowStart && nextCol === S.virtual.colStart) return;
-      S.virtual.rowStart = nextRow;
-      S.virtual.colStart = nextCol;
-      if (!scheduled) {
-        scheduled = true;
-        requestAnimationFrame(() => refreshGrid());
-      }
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        const nextRow = window.SerpDeskVirtualGrid.nextWindowStart({
+          scrollOffset: wrap.scrollTop,
+          itemSize: S.virtual.rowHeight,
+          viewportSize: wrap.clientHeight,
+          totalItems: rowCount,
+          windowStart: S.virtual.rowStart,
+          windowSize: S.virtual.rowWindow,
+          overscan: S.virtual.rowOverscan,
+        });
+        const nextCol = window.SerpDeskVirtualGrid.nextWindowStart({
+          scrollOffset: Math.max(0, wrap.scrollLeft - fixedWidth),
+          itemSize: 72,
+          viewportSize: Math.max(0, wrap.clientWidth - fixedWidth),
+          totalItems: S.grid.runs.length,
+          windowStart: S.virtual.colStart,
+          windowSize: S.virtual.colWindow,
+          overscan: S.virtual.colOverscan,
+        });
+        if (nextRow === S.virtual.rowStart && nextCol === S.virtual.colStart) return;
+        S.virtual.rowStart = nextRow;
+        S.virtual.colStart = nextCol;
+        refreshVirtualGrid();
+      });
     };
   }
   bindHistoryPager(box);
@@ -843,11 +977,7 @@ function renderGrid() {
   const colSpacer = (count, tag = 'td') => count > 0
     ? `<${tag} class="v-col-space" style="width:${count * 72}px;min-width:${count * 72}px"></${tag}>`
     : '';
-  const hasFreq = g.keywords.some((k) => k.freq !== null && k.freq !== undefined);
-  const hasStats = g.keywords.some((k) => g.stats && g.stats[k.id] && g.stats[k.id][S.engine]);
-  const statAt = hasStats
-    ? Object.values(g.stats).map((s) => s[S.engine]?.at).filter(Boolean).sort().pop()
-    : null;
+  const { hasFreq, hasStats, statAt } = gridMeta();
   const psDays = activeProject().cfg.psDays || 28;
   const psName = S.engine === 'yandex' ? 'Яндекс.Вебмастера' : 'Search Console';
   const statTip = `Реальная статистика из ${psName} за ${psDays} дней${statAt ? ' · обновлено ' + fmtDateFull(statAt) : ''}. История копится с каждым «⟳ ПС» — смотри в графике фразы.`;
@@ -863,12 +993,22 @@ function renderGrid() {
     ` : ''}
     <button class="btn" id="btnCopyVisible">⧉ Копировать ${filtered ? 'видимые' : 'все'}</button>
   </div>`;
+  const betaBanner = S.engine === 'yandex' && activeProject().cfg.yandex.serpFeaturesBeta
+    ? `<div class="beta-warning"><b>β Бета: блоки выдачи.</b> Органическая позиция остаётся основной. Маленькое β-число показывает приблизительное место с учётом блоков, которые вернул XMLRiver. Реклама и динамические элементы могут определяться не полностью.</div>`
+    : '';
 
   const head = `<tr>
-    <th class="h-phrase" data-sort="phrase">
+    <th class="h-phrase">
       <span class="kw-head">
         <input type="checkbox" id="kwSelectAll" title="Выбрать все ${filtered ? 'видимые' : 'запросы'}">
-        <span>Фраза (${kws.length}${filtered ? ` из ${g.keywords.length}` : ''})${sortArrow('phrase')}</span>
+        <span class="kw-sort-label" data-sort="phrase">Фраза (${kws.length}${filtered ? ` из ${g.keywords.length}` : ''})${sortArrow('phrase')}</span>
+        <span class="kw-search-controls">
+          <input type="text" id="kwSearch" placeholder="Найти фразу…" value="${esc(S.view.q)}" title="Поиск без учёта регистра. Esc очищает поле.">
+          <select id="kwSearchMode" title="Как искать">
+            <option value="contains" ${(S.view.searchMode || 'contains') === 'contains' ? 'selected' : ''}>Содержит</option>
+            <option value="exact" ${S.view.searchMode === 'exact' ? 'selected' : ''}>Точно</option>
+          </select>
+        </span>
       </span>
     </th>
     ${hasFreq ? `<th class="h-freq" data-sort="freq" title="Частотность Вордстат">Частота${sortArrow('freq')}</th>` : ''}
@@ -904,10 +1044,22 @@ function renderGrid() {
       const label = c.p === 0 ? '—' : c.p;
       const hasUrl = Boolean(c.p > 0 && c.u);
       let tip = hasUrl ? `Открыть релевантную страницу:\n${c.u}` : (c.p === 0 ? 'Не найден в ТОП-' + depth : '');
+      const features = Array.isArray(c.f) ? c.f : [];
+      if (c.vp > 0 && c.vp !== c.p) tip += `\nβ Приблизительное место с учётом блоков: ${c.vp}`;
+      if (features.length) {
+        const featureSummary = features.slice(0, 8).map((feature) => {
+          const count = Number(feature.count) > 1 ? ` ×${feature.count}` : '';
+          return `${serpFeatureLabel(feature)}${count}`;
+        }).join(', ');
+        tip += `\nβ Обнаруженные блоки: ${featureSummary}`;
+      }
       if (wrongTarget) tip += `\n⚠ Ранжируется не целевая страница.\nЦель: ${kw.target_url}`;
       if (urlChanged) tip += `\n◆ URL сменился, было: ${pc.u}`;
+      const betaMark = c.vp > 0 && c.vp !== c.p
+        ? `<small class="beta-pos" title="Приблизительное визуальное место">β${c.vp}</small>`
+        : (features.length ? '<small class="beta-pos" title="XMLRiver обнаружил спецблоки">β</small>' : '');
       return `<td class="c-pos"><span class="pos ${bucketClass(c.p)}${wrongTarget ? ' wrong' : ''}${hasUrl ? ' has-url' : ''}"
-        ${hasUrl ? `data-url="${esc(c.u)}" role="link" tabindex="0"` : ''} title="${esc(tip)}">${label}${d}${hasUrl ? '<small class="open-url">↗</small>' : ''}</span></td>`;
+        ${hasUrl ? `data-url="${esc(c.u)}" role="link" tabindex="0"` : ''} title="${esc(tip)}">${label}${d}${betaMark}${hasUrl ? '<small class="open-url">↗</small>' : ''}</span></td>`;
     }).join('');
     return `<tr class="${S.selectedKeywordIds.has(kw.id) ? 'selected' : ''}">
       <td class="c-phrase">
@@ -951,7 +1103,7 @@ function renderGrid() {
     ? `<tr class="v-row-space"><td colspan="${totalColumns}" style="height:${bottomRows * S.virtual.rowHeight}px"></td></tr>`
     : '';
 
-  return `${bulkBar}${renderHistoryPager()}<div class="grid-wrap"><table class="grid">
+  return `${betaBanner}${bulkBar}${renderHistoryPager()}<div class="grid-wrap"><table class="grid">
     <thead>${head}</thead>
     <tbody>${topSpacer}${rows}${bottomSpacer}${emptyRuns}</tbody>
   </table></div>`;
@@ -1585,11 +1737,13 @@ async function openSettingsModal() {
       </div>
       <div class="field">
         <label>База данных (перенос между Mac и Windows)</label>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" id="fDbExport">Экспорт базы…</button>
           <button class="btn" id="fDbImport">Импорт базы…</button>
+          <button class="btn" id="fDbBackups">Автокопии…</button>
+          <button class="btn" id="fDiagnostics">Собрать диагностику…</button>
         </div>
-        <div class="hint">Экспорт сохраняет все проекты, фразы и историю в один .sqlite. Импорт заменяет текущую базу и перезапускает приложение (старая сохранится рядом как .before-import).</div>
+        <div class="hint">SerpDesk автоматически хранит 14 ежедневных копий. Диагностика сохраняет версии, состояния запусков и последние ошибки, но не включает API-ключи, токены и пароли.</div>
       </div>
       <div class="sect-title">Реальная статистика поисковиков <span class="hint" style="display:inline">— необязательно, мануал: docs/GSC-YAVM-manual.md</span></div>
       <div class="field">
@@ -1666,6 +1820,15 @@ async function openSettingsModal() {
     try { await window.api.importDb(); }
     catch (e) { toast(e.message.replace(/^.*Error: /, ''), 'err'); }
   };
+  $('#fDbBackups', m).onclick = openBackupsModal;
+  $('#fDiagnostics', m).onclick = async () => {
+    try {
+      const r = await window.api.exportDiagnostics();
+      if (r.saved) toast('Диагностика сохранена: ' + r.filePath, 'ok');
+    } catch (e) {
+      toast(e.message.replace(/^.*Error: /, ''), 'err');
+    }
+  };
   const lg = $('#fGscLogout', m);
   if (lg) lg.onclick = async () => {
     S.settings = await window.api.setSettings({ gsc_refresh_token: '' });
@@ -1719,11 +1882,40 @@ async function openSettingsModal() {
   };
 }
 
+async function openBackupsModal() {
+  const items = await window.api.listBackups();
+  const rows = items.length
+    ? items.map((item) => `<div class="backup-row">
+        <div><b>${esc(item.date.split('-').reverse().join('.'))}</b><span>${(item.size / 1024 / 1024).toFixed(1)} МБ</span></div>
+        <button class="btn btn-warn backup-restore" data-name="${esc(item.name)}">Восстановить</button>
+      </div>`).join('')
+    : '<div class="hint">Автокопий пока нет. Первая появится после следующего запуска приложения.</div>';
+  const m = openModal(`
+    <div class="modal-head"><h2>Автоматические резервные копии</h2><button class="icon-btn" id="mClose">✕</button></div>
+    <div class="modal-body">
+      <div class="beta-warning">Хранятся последние 14 ежедневных копий всей базы: проекты, запросы, позиции и настройки.</div>
+      <div class="backup-list">${rows}</div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="mCancel">Закрыть</button></div>
+  `);
+  $('#mClose', m.parentElement).onclick = closeModal;
+  $('#mCancel', m).onclick = closeModal;
+  m.querySelectorAll('.backup-restore').forEach((button) => {
+    button.onclick = async () => {
+      if (!confirm(`Восстановить базу из копии за ${button.closest('.backup-row').querySelector('b').textContent}? Приложение перезапустится.`)) return;
+      button.disabled = true;
+      button.textContent = 'Восстанавливаю…';
+      try { await window.api.restoreBackup({ name: button.dataset.name }); }
+      catch (e) { button.disabled = false; button.textContent = 'Восстановить'; toast(e.message.replace(/^.*Error: /, ''), 'err'); }
+    };
+  });
+}
+
 /* ---- проект ---- */
 
 function openProjectModal(p) {
   const isNew = !p;
-  const cfg = p ? p.cfg : { depth: 30, device: 'desktop', yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api' }, google: { enabled: false, loc: '', country: '' } };
+  const cfg = p ? p.cfg : { depth: 30, device: 'desktop', yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: false, loc: '', country: '' } };
   const m = openModal(`
     <div class="modal-head"><h2>${isNew ? 'Новый проект' : 'Настройки проекта'}</h2><button class="icon-btn" id="mClose">✕</button></div>
     <div class="modal-body">
@@ -1766,6 +1958,8 @@ function openProjectModal(p) {
             <option value="live" ${cfg.yandex.source === 'live' ? 'selected' : ''}>Лайв-выдача — как в браузере, 10 позиций на запрос</option>
           </select>
         </div>
+        <label class="check beta-check"><input type="checkbox" id="fSerpBeta" ${cfg.yandex.serpFeaturesBeta ? 'checked' : ''}> β Бета: учитывать рекламу, колдунщики и товарные блоки</label>
+        <div class="hint">Работает только с «Лайв-выдачей». XMLRiver вернёт доступные спецблоки без отдельного запроса. Визуальное место приблизительное: состав выдачи меняется, а некоторые динамические элементы могут отсутствовать в XML.</div>
         <div class="row2">
           <div class="field">
             <label>Регион (lr)</label>
@@ -1806,6 +2000,15 @@ function openProjectModal(p) {
   `);
   $('#mClose', m.parentElement).onclick = closeModal;
   $('#mCancel', m).onclick = closeModal;
+  const betaToggle = $('#fSerpBeta', m);
+  const yaSource = $('#fYaSrc', m);
+  const syncBetaAvailability = () => {
+    const available = yaSource.value === 'live';
+    betaToggle.disabled = !available;
+    if (!available) betaToggle.checked = false;
+  };
+  yaSource.onchange = syncBetaAvailability;
+  syncBetaAvailability();
   if (!isNew) {
     $('#mDelete', m).onclick = async () => {
       if (!confirm(`Удалить проект «${p.name}» со всей историей позиций?`)) return;
@@ -1829,7 +2032,13 @@ function openProjectModal(p) {
         device: $('#fDeviceMode', m).value === 'mobile' ? 'mobile' : 'desktop',
         psDays: Number($('#fPsDays', m).value) || 28,
         competitors: $('#fCompetitors', m).value.split('\n').map((x) => x.trim()).filter(Boolean),
-        yandex: { enabled: $('#fYaOn', m).checked, lr: $('#fYaLr', m).value.trim(), domain: $('#fYaDomain', m).value, source: $('#fYaSrc', m).value },
+        yandex: {
+          enabled: $('#fYaOn', m).checked,
+          lr: $('#fYaLr', m).value.trim(),
+          domain: $('#fYaDomain', m).value,
+          source: $('#fYaSrc', m).value,
+          serpFeaturesBeta: $('#fSerpBeta', m).checked,
+        },
         google: { enabled: $('#fGoOn', m).checked, loc: $('#fGoLoc', m).value.trim(), country: $('#fGoCountry', m).value.trim() },
       },
     };

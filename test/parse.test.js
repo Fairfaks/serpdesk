@@ -3,10 +3,13 @@
 
 const assert = require('assert');
 const { parseSerpXml, makeDomainMatcher, buildSearchUrl, normalizeHost, XmlRiverError } = require('../lib/xmlriver');
+const { estimateVisualPosition } = require('../lib/checker');
 
 const okXml = `<?xml version="1.0" encoding="UTF-8"?>
 <yandexsearch version="1.0">
 <response date="20260723T000000">
+<advcount>2</advcount>
+<searchsters><item><name>images</name><position>1</position></item></searchsters>
 <results>
 <grouping>
 <group id="1"><doccount>1</doccount>
@@ -36,10 +39,14 @@ const emptyXml = `<?xml version="1.0" encoding="UTF-8"?>
 const r1 = parseSerpXml(okXml);
 assert.strictEqual(r1.docs.length, 3, 'видео-блок должен быть отброшен, органика без contenttype — учтена');
 assert.strictEqual(r1.docs[1].url, 'https://favorit-consult.ru/uslugi/bankrotstvo/');
+assert.ok(r1.features.some((feature) => feature.type === 'ads_top' && feature.count === 2));
+assert.ok(r1.features.some((feature) => feature.type === 'searchster' && feature.name === 'images'));
+assert.ok(r1.features.some((feature) => feature.type === 'content' && feature.name === 'video'));
+assert.strictEqual(estimateVisualPosition(3, r1.features), 7, 'визуальное место учитывает две рекламы и два центральных спецблока');
 assert.strictEqual(r1.end, false);
 
 const r2 = parseSerpXml(emptyXml);
-assert.deepStrictEqual(r2, { docs: [], end: true }, 'код 15 = пустая выдача, не ошибка');
+assert.deepStrictEqual(r2, { docs: [], features: [], end: true }, 'код 15 = пустая выдача, не ошибка');
 
 let threw = null;
 try { parseSerpXml(errXml); } catch (e) { threw = e; }
@@ -68,6 +75,9 @@ assert.ok(!uYa.includes('page='), 'первая страница без пара
 const uApi = buildSearchUrl('yandex', creds, { lr: '213', yandexSource: 'api', apiDepth: 30 }, 'тест', null);
 assert.ok(uApi.includes('/yandex/xml'), 'search api эндпоинт');
 assert.ok(decodeURIComponent(uApi).includes('groups-on-page=30'), 'глубина одним запросом через groupby');
+
+const uBeta = buildSearchUrl('yandex', creds, { lr: '213', yandexDomain: 'ru', serpFeaturesBeta: true }, 'тест', null);
+assert.ok(decodeURIComponent(uBeta).includes('additional=y_topads,y_bottomads'), 'бета включает дополнительные блоки XMLRiver');
 
 const uGo = buildSearchUrl('google', creds, { loc: '1000028', device: 'mobile' }, 'тест', 3);
 assert.ok(uGo.includes('/search/xml'), 'google-эндпоинт');
