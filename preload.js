@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   refreshPsStats: invoke('psstats:refresh'),
   testPsAccess: invoke('psstats:test'),
   psStatsHistory: invoke('psstats:history'),
+  metrikaHistory: invoke('metrika:history'),
   gscLogin: invoke('gsc:login'),
   pickJsonFile: invoke('dialog:pick-json'),
   getVersion: invoke('app:version'),

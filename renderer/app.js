@@ -35,12 +35,19 @@ if (!window.api) {
   });
   cells[7][5] = { p: null, u: null, e: 'Выполните перезапрос. Ответ от поисковой системы не получен.' };
   const demoStats = {};
+  const demoMetrika = {};
   demoKws.forEach((k, i) => {
     if (i === 6) return;
     demoStats[k.id] = {
       yandex: { s: [1240, 310, 890, 150, 45, 505, 0, 210][i], c: [86, 12, 41, 3, 1, 22, 0, 6][i], r: 0.05, p: [3.2, 8.1, 4.4, 16.9, 33.1, 9.8, 0, 24.5][i], at: '2026-07-23T10:00:00Z', d: 28, df: '2026-06-25', dt: '2026-07-23' },
       google: { s: [980, 240, 700, 90, 30, 410, 0, 160][i], c: [51, 8, 30, 2, 1, 18, 0, 4][i], r: 0.04, p: [4.1, 9.3, 5.2, 19.4, 41.0, 11.2, 0, 28.9][i], at: '2026-07-23T10:00:00Z', d: 28, df: '2026-06-25', dt: '2026-07-23' },
     };
+    if (i < 5) {
+      demoMetrika[k.id] = {
+        yandex: { v: [73, 18, 32, 7, 3][i], u: [61, 16, 28, 6, 3][i], b: [8.2, 12.5, 9.4, 17.1, 0][i], p: [2.4, 1.9, 2.8, 1.5, 3][i], t: 94, g: [5, 1, 3, 0, 1][i], at: '2026-07-23T10:00:00Z', d: 28, df: '2026-06-25', dt: '2026-07-23' },
+        google: { v: [42, 11, 21, 4, 2][i], u: [38, 10, 19, 4, 2][i], b: [10.1, 14.2, 8.8, 20, 0][i], p: 2.1, t: 81, g: [3, 0, 2, 0, 0][i], at: '2026-07-23T10:00:00Z', d: 28, df: '2026-06-25', dt: '2026-07-23' },
+      };
+    }
   });
   window.api = {
     getSettings: async () => ({ xmlriver_user: 'demo', xmlriver_key: 'demo', concurrency: '3', autocheck_enabled: '0', autocheck_time: '07:00' }),
@@ -75,7 +82,7 @@ if (!window.api) {
         compPos[k.id] = { 'rival-one.ru': [1, 4, 2, 8, 12, 5, 0, 15][i] || 0, 'rival-two.ru': [6, 9, 7, 3, 0, 11, 4, 8][i] || 0 };
       });
       return {
-        runs: demoRuns, keywords: demoKws, cells, stats: demoStats, notes: [],
+        runs: demoRuns, keywords: demoKws, cells, stats: demoStats, metrika: demoMetrika, notes: [],
         competitors: ['rival-one.ru', 'rival-two.ru'], compPos,
         pagination: { hasMore: false, nextCursor: null, pageSize: 20 },
       };
@@ -87,12 +94,16 @@ if (!window.api) {
     listBackups: async () => [],
     restoreBackup: async () => ({ restored: false }),
     exportDiagnostics: async () => ({ saved: false }),
-    refreshPsStats: async () => ({ yandex: { matched: 7, total: 8 }, google: { matched: 7, total: 8 }, days: 28 }),
-    testPsAccess: async () => ({ yavm: { ok: true, hosts: 3 }, gsc: { ok: true, sites: 5 } }),
+    refreshPsStats: async () => ({ yandex: { matched: 7, total: 8 }, google: { matched: 7, total: 8 }, metrika: { matchedYandex: 5, matchedGoogle: 5, total: 8 }, days: 28 }),
+    testPsAccess: async () => ({ yavm: { ok: true, hosts: 3 }, gsc: { ok: true, sites: 5 }, metrika: { ok: true, counters: 2 } }),
     psStatsHistory: async () => ([
       { days: 28, date_from: '2026-06-25', date_to: '2026-07-23', shows: 1240, clicks: 86, ctr: 0.069, position: 3.2, fetched_at: '2026-07-23T10:00:00Z' },
       { days: 28, date_from: '2026-06-18', date_to: '2026-07-16', shows: 1105, clicks: 71, ctr: 0.064, position: 3.9, fetched_at: '2026-07-16T10:00:00Z' },
       { days: 28, date_from: '2026-06-11', date_to: '2026-07-09', shows: 987, clicks: 55, ctr: 0.056, position: 4.6, fetched_at: '2026-07-09T10:00:00Z' },
+    ]),
+    metrikaHistory: async () => ([
+      { days: 28, date_from: '2026-06-25', date_to: '2026-07-23', visits: 73, users: 61, bounce_rate: 8.2, page_depth: 2.4, duration: 94, goal_reaches: 5, fetched_at: '2026-07-23T10:00:00Z' },
+      { days: 28, date_from: '2026-06-18', date_to: '2026-07-16', visits: 55, users: 48, bounce_rate: 9.1, page_depth: 2.2, duration: 88, goal_reaches: 3, fetched_at: '2026-07-16T10:00:00Z' },
     ]),
     gscLogin: async () => ({ ok: true }),
     pickJsonFile: async () => ({ path: null }),
@@ -328,6 +339,7 @@ function visibleKeywords() {
     return c.p;
   };
   const stat = (k) => (g.stats && g.stats[k.id] && g.stats[k.id][S.engine]) || null;
+  const mst = (k) => (g.metrika && g.metrika[k.id] && g.metrika[k.id][S.engine]) || null;
   list.sort((a, b) => {
     let d = 0;
     if (sort.key === 'phrase') d = a.phrase.localeCompare(b.phrase, 'ru');
@@ -335,6 +347,10 @@ function visibleKeywords() {
     else if (sort.key === 'shows') d = (stat(a)?.s ?? -1) - (stat(b)?.s ?? -1);
     else if (sort.key === 'clicks') d = (stat(a)?.c ?? -1) - (stat(b)?.c ?? -1);
     else if (sort.key === 'realpos') d = (stat(a)?.p || 100000) - (stat(b)?.p || 100000);
+    else if (sort.key === 'mvisits') d = (mst(a)?.v ?? -1) - (mst(b)?.v ?? -1);
+    else if (sort.key === 'musers') d = (mst(a)?.u ?? -1) - (mst(b)?.u ?? -1);
+    else if (sort.key === 'mbounce') d = (mst(a)?.b ?? -1) - (mst(b)?.b ?? -1);
+    else if (sort.key === 'mgoals') d = (mst(a)?.g ?? -1) - (mst(b)?.g ?? -1);
     else if (sort.key === 'run' && sort.runId) d = cellRank(a, sort.runId) - cellRank(b, sort.runId);
     return d * sort.dir || a.phrase.localeCompare(b.phrase, 'ru');
   });
@@ -354,14 +370,18 @@ function visibleKeywords() {
 
 function gridMeta() {
   const g = S.grid;
-  if (!g) return { hasFreq: false, hasStats: false, statAt: null };
+  if (!g) return { hasFreq: false, hasStats: false, statAt: null, hasMetrika: false, metrikaAt: null };
   if (gridMetaCache && gridMetaCache.grid === g && gridMetaCache.engine === S.engine) return gridMetaCache;
   const hasFreq = g.keywords.some((k) => k.freq !== null && k.freq !== undefined);
   const hasStats = g.keywords.some((k) => g.stats && g.stats[k.id] && g.stats[k.id][S.engine]);
   const statAt = hasStats
     ? Object.values(g.stats).map((s) => s[S.engine]?.at).filter(Boolean).sort().pop()
     : null;
-  gridMetaCache = { grid: g, engine: S.engine, hasFreq, hasStats, statAt };
+  const hasMetrika = g.keywords.some((k) => g.metrika && g.metrika[k.id] && g.metrika[k.id][S.engine]);
+  const metrikaAt = hasMetrika
+    ? Object.values(g.metrika).map((s) => s[S.engine]?.at).filter(Boolean).sort().pop()
+    : null;
+  gridMetaCache = { grid: g, engine: S.engine, hasFreq, hasStats, statAt, hasMetrika, metrikaAt };
   return gridMetaCache;
 }
 
@@ -372,7 +392,7 @@ function setSort(key, runId = null) {
   } else {
     s.key = key;
     s.runId = runId;
-    s.dir = (key === 'freq' || key === 'shows' || key === 'clicks') ? -1 : 1; // объёмные метрики — по убыванию
+    s.dir = (key === 'freq' || key === 'shows' || key === 'clicks' || key === 'mvisits' || key === 'musers' || key === 'mgoals') ? -1 : 1; // объёмные метрики — по убыванию
   }
   if (key === 'phrase') {
     S.virtual.colStart = 0;
@@ -515,7 +535,7 @@ function renderMain() {
             : `<button class="btn btn-primary" id="btnUpdate">Обновить</button>`}
           <button class="btn" id="btnAddKw">+ Запросы</button>
           <button class="btn" id="btnImportHistory" title="Импортировать фразы вместе с историческими позициями из XLSX или CSV">Импорт истории…</button>
-          <button class="btn" id="btnPs" title="Подтянуть реальные показы/клики/позиции из Яндекс.Вебмастера и Google Search Console за 28 дней">⟳ ПС</button>
+          <button class="btn" id="btnPs" title="Обновить подключённые источники: Яндекс.Вебмастер, Google Search Console и Яндекс Метрику">⟳ Данные</button>
           <button class="btn" id="btnReport" title="Красивый отчёт (PDF / печать)">Отчёт</button>
           <button class="btn" id="btnCsv" title="Экспорт CSV">CSV</button>
           <button class="icon-btn" id="btnDuplicateProj" title="Дублировать проект">⧉</button>
@@ -836,7 +856,7 @@ function bindGridEvents() {
     }
     const rowCount = visibleKeywords().length;
     const meta = gridMeta();
-    const fixedWidth = PHRASE_COLUMN_WIDTH + (meta.hasFreq ? 80 : 0) + (meta.hasStats ? 240 : 0);
+    const fixedWidth = PHRASE_COLUMN_WIDTH + (meta.hasFreq ? 80 : 0) + (meta.hasStats ? 240 : 0) + (meta.hasMetrika ? 280 : 0);
     let scheduled = false;
     wrap.onscroll = () => {
       S.virtual.scrollTop = wrap.scrollTop;
@@ -1002,10 +1022,11 @@ function renderGrid() {
   const colSpacer = (count, tag = 'td') => count > 0
     ? `<${tag} class="v-col-space" style="width:${count * 72}px;min-width:${count * 72}px"></${tag}>`
     : '';
-  const { hasFreq, hasStats, statAt } = gridMeta();
+  const { hasFreq, hasStats, statAt, hasMetrika, metrikaAt } = gridMeta();
   const psDays = activeProject().cfg.psDays || 28;
   const psName = S.engine === 'yandex' ? 'Яндекс.Вебмастера' : 'Search Console';
-  const statTip = `Реальная статистика из ${psName} за ${psDays} дней${statAt ? ' · обновлено ' + fmtDateFull(statAt) : ''}. История копится с каждым «⟳ ПС» — смотри в графике фразы.`;
+  const statTip = `Реальная статистика из ${psName} за ${psDays} дней${statAt ? ' · обновлено ' + fmtDateFull(statAt) : ''}. История копится с каждым «⟳ Данные» — смотри в графике фразы.`;
+  const metrikaTip = `Трафик по поисковой фразе из Яндекс Метрики за ${psDays} дней${metrikaAt ? ' · обновлено ' + fmtDateFull(metrikaAt) : ''}. Метрика скрывает часть низкочастотных запросов, поэтому пустая ячейка не означает ноль.`;
   const depth = activeProject().cfg.depth;
   const selectedCount = S.selectedKeywordIds.size;
   const filtered = kws.length !== g.keywords.length;
@@ -1041,6 +1062,11 @@ function renderGrid() {
       <th class="h-stat" data-sort="shows" title="${esc(statTip)}">Показы·${psDays}д${sortArrow('shows')}</th>
       <th class="h-stat" data-sort="clicks" title="${esc(statTip)}">Клики·${psDays}д${sortArrow('clicks')}</th>
       <th class="h-stat" data-sort="realpos" title="${esc(statTip)} — средняя позиция по реальным показам">Поз.ПС${sortArrow('realpos')}</th>` : ''}
+    ${hasMetrika ? `
+      <th class="h-stat h-metrika" data-sort="mvisits" title="${esc(metrikaTip)}">Визиты·М${sortArrow('mvisits')}</th>
+      <th class="h-stat" data-sort="musers" title="${esc(metrikaTip)}">Люди·М${sortArrow('musers')}</th>
+      <th class="h-stat" data-sort="mbounce" title="${esc(metrikaTip)}">Отказы·М${sortArrow('mbounce')}</th>
+      <th class="h-stat" data-sort="mgoals" title="${esc(metrikaTip)}">Цели·М${sortArrow('mgoals')}</th>` : ''}
     ${colSpacer(colStart, 'th')}
     ${visibleRuns.map((r) => `<th data-sort="run" data-run="${r.id}" title="${esc(fmtDateFull(r.started_at))}${r.status !== 'done' ? ' · ' + r.status : ''}">${fmtDate(r.started_at)}${sortArrow('run', r.id)}</th>`).join('')}
     ${colSpacer(displayRuns.length - colEnd, 'th')}
@@ -1108,6 +1134,17 @@ function renderGrid() {
           <td class="c-stat" title="${esc(tip)}">${fmtFreq(st.c)}</td>
           <td class="c-stat" title="${esc(tip)}">${st.p != null && st.s > 0 ? st.p.toFixed(1) : ''}</td>`;
       })() : ''}
+      ${hasMetrika ? (() => {
+        const st = g.metrika && g.metrika[kw.id] && g.metrika[kw.id][S.engine];
+        if (!st) return '<td class="c-stat c-metrika"></td><td class="c-stat"></td><td class="c-stat"></td><td class="c-stat"></td>';
+        const period = st.df && st.dt ? `${st.df} — ${st.dt}` : `${st.d || psDays} дней`;
+        const sample = st.sampled ? ` · выборка${st.share != null ? ` ${(st.share * 100).toFixed(0)}%` : ''}` : '';
+        const tip = `Яндекс Метрика за ${period}${sample} · обновлено ${fmtDate(st.at)}`;
+        return `<td class="c-stat c-metrika" title="${esc(tip)}">${fmtFreq(st.v)}</td>
+          <td class="c-stat" title="${esc(tip)}">${fmtFreq(st.u)}</td>
+          <td class="c-stat" title="${esc(tip)}">${Number(st.b || 0).toFixed(1)}%</td>
+          <td class="c-stat" title="${esc(tip)}">${Number(st.g || 0).toLocaleString('ru-RU')}</td>`;
+      })() : ''}
       ${colSpacer(colStart)}
       ${tds}
       ${colSpacer(displayRuns.length - colEnd)}
@@ -1118,7 +1155,7 @@ function renderGrid() {
     ? `<tr><td class="c-phrase" style="color:var(--muted2)">Проверок ещё не было — нажмите «Обновить»</td></tr>`
     : '';
 
-  const staticColumns = 1 + (hasFreq ? 1 : 0) + (hasStats ? 3 : 0);
+  const staticColumns = 1 + (hasFreq ? 1 : 0) + (hasStats ? 3 : 0) + (hasMetrika ? 4 : 0);
   const totalColumns = staticColumns + visibleRuns.length + (colStart > 0 ? 1 : 0) + (colEnd < displayRuns.length ? 1 : 0);
   const topSpacer = rowStart > 0
     ? `<tr class="v-row-space"><td colspan="${totalColumns}" style="height:${rowStart * S.virtual.rowHeight}px"></td></tr>`
@@ -1957,8 +1994,8 @@ async function retryErrors() {
 async function refreshPs() {
   const p = activeProject();
   if (!p) return;
-  if (!S.settings.yavm_token && !S.settings.gsc_key_path) {
-    toast('Сначала укажите токен Яндекс.Вебмастера и/или JSON-ключ Google в настройках (⚙)', 'err');
+  if (!S.settings.yavm_token && !S.settings.gsc_key_path && !S.settings.gsc_refresh_token && !S.settings.metrika_token) {
+    toast('Сначала подключите хотя бы один источник данных в настройках (⚙)', 'err');
     openSettingsModal();
     return;
   }
@@ -1969,13 +2006,16 @@ async function refreshPs() {
     const msg = [];
     if (r.yandex) msg.push(r.yandex.error ? `ЯВМ: ${r.yandex.error}` : `ЯВМ: найдено ${r.yandex.matched} из ${r.yandex.total} фраз`);
     if (r.google) msg.push(r.google.error ? `GSC: ${r.google.error}` : `GSC: найдено ${r.google.matched} из ${r.google.total} фраз`);
-    const hasErr = (r.yandex && r.yandex.error) || (r.google && r.google.error);
+    if (r.metrika) msg.push(r.metrika.error
+      ? `Метрика: ${r.metrika.error}`
+      : `Метрика: Яндекс ${r.metrika.matchedYandex}, Google ${r.metrika.matchedGoogle} из ${r.metrika.total} фраз`);
+    const hasErr = (r.yandex && r.yandex.error) || (r.google && r.google.error) || (r.metrika && r.metrika.error);
     toast(msg.join(' · ') || 'Нечего обновлять', hasErr ? 'err' : 'ok');
     await loadGrid();
     renderMain();
   } catch (e) {
     toast(e.message.replace(/^.*Error: /, ''), 'err');
-    if (btn) { btn.disabled = false; btn.textContent = '⟳ ПС'; }
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ Данные'; }
   }
 }
 
@@ -2056,6 +2096,11 @@ async function openSettingsModal() {
         <input type="password" id="fYavm" value="${esc(s.yavm_token)}" placeholder="OAuth-токен с правами webmaster:hostinfo">
       </div>
       <div class="field">
+        <label>Токен Яндекс Метрики (OAuth, необязательно)</label>
+        <input type="password" id="fMetrika" value="${esc(s.metrika_token || '')}" placeholder="OAuth-токен с правами metrika:read">
+        <div class="hint">Добавляет визиты, пользователей, отказы и цели по самим поисковым фразам. Данные по URL не распределяются. Метрика может скрывать часть низкочастотных запросов.</div>
+      </div>
+      <div class="field">
         <label>Google Search Console — способ 1: вход через Google (видит все сайты, к которым у тебя есть доступ, включая чужие)</label>
         <div class="row2" style="margin-bottom:8px">
           <input type="text" id="fGscCid" value="${esc(s.gsc_client_id)}" placeholder="Client ID (…apps.googleusercontent.com)">
@@ -2096,6 +2141,7 @@ async function openSettingsModal() {
     xmlriver_user: $('#fUser', m).value.trim(),
     xmlriver_key: $('#fKey', m).value.trim(),
     yavm_token: $('#fYavm', m).value.trim(),
+    metrika_token: $('#fMetrika', m).value.trim(),
     gsc_key_path: $('#fGscPath', m).value.trim(),
     gsc_client_id: $('#fGscCid', m).value.trim(),
     gsc_client_secret: $('#fGscCsec', m).value.trim(),
@@ -2156,7 +2202,7 @@ async function openSettingsModal() {
       parts.push('XMLRiver: ' + r.error);
       bad = true;
     }
-    if (S.settings.yavm_token || S.settings.gsc_key_path) {
+    if (S.settings.yavm_token || S.settings.gsc_key_path || S.settings.gsc_refresh_token || S.settings.metrika_token) {
       const t = await window.api.testPsAccess();
       if (t.yavm) {
         parts.push(t.yavm.ok ? `ЯВМ: доступно сайтов — ${t.yavm.hosts}` : 'ЯВМ: ' + t.yavm.error);
@@ -2166,6 +2212,10 @@ async function openSettingsModal() {
         const mode = t.gsc.mode === 'oauth' ? ', через вход Google' : (t.gsc.mode === 'key' ? ', через JSON-ключ' : '');
         parts.push(t.gsc.ok ? `GSC: доступно ресурсов — ${t.gsc.sites}${mode}` : 'GSC: ' + t.gsc.error);
         bad = bad || !t.gsc.ok;
+      }
+      if (t.metrika) {
+        parts.push(t.metrika.ok ? `Метрика: доступно счётчиков — ${t.metrika.counters}` : 'Метрика: ' + t.metrika.error);
+        bad = bad || !t.metrika.ok;
       }
     }
     el.className = 'conn-result ' + (bad ? 'err' : 'ok');
@@ -2257,7 +2307,12 @@ function openProjectModal(p, options = {}) {
           <select id="fPsDays">${[7,14,28,90].map((n) => `<option value="${n}" ${(cfg.psDays || 28) === n ? 'selected' : ''}>${n} дней</option>`).join('')}</select>
         </div>
       </div>
-      <div class="hint">Каждые 10 позиций = 1 запрос XMLRiver на фразу (Яндекс через Search API — вся глубина одним запросом). Найдено раньше — глубже не листаем. Период ПС — окно, за которое «⟳ ПС» берёт показы/клики из Вебмастера и GSC.</div>
+      <div class="hint">Каждые 10 позиций = 1 запрос XMLRiver на фразу (Яндекс через Search API — вся глубина одним запросом). Найдено раньше — глубже не листаем. Период данных применяется к Вебмастеру, GSC и Метрике.</div>
+      <div class="field">
+        <label>ID счётчика Яндекс Метрики (необязательно)</label>
+        <input type="text" inputmode="numeric" id="fMetrikaCounter" value="${esc(cfg.metrikaCounterId || '')}" placeholder="пусто = подобрать по домену автоматически">
+        <div class="hint">Нужен только если к токену подключено несколько счётчиков или домен не совпадает с адресом сайта в Метрике.</div>
+      </div>
       <div class="engine-block">
         <label class="check"><input type="checkbox" id="fYaOn" ${cfg.yandex.enabled ? 'checked' : ''}> Яндекс</label>
         <div class="field">
@@ -2347,6 +2402,7 @@ function openProjectModal(p, options = {}) {
         deviceMode: $('#fDeviceMode', m).value,
         device: $('#fDeviceMode', m).value === 'mobile' ? 'mobile' : 'desktop',
         psDays: Number($('#fPsDays', m).value) || 28,
+        metrikaCounterId: $('#fMetrikaCounter', m).value.trim(),
         competitors: $('#fCompetitors', m).value.split('\n').map((x) => x.trim()).filter(Boolean),
         yandex: {
           enabled: $('#fYaOn', m).checked,
@@ -2594,6 +2650,7 @@ function openChartModal(kw) {
         <span><i class="lg lg-gap"></i> ошибка/нет данных — разрыв</span>
       </div>
       <div id="psHist"></div>
+      <div id="metrikaHist"></div>
     </div>
   `);
   $('#mClose', m.parentElement).onclick = closeModal;
@@ -2605,7 +2662,7 @@ function openChartModal(kw) {
   });
   drawChart($('#chartCanvas', m), points, depth);
 
-  // История снимков статистики ПС по этой фразе (копится с каждым «⟳ ПС»).
+  // История снимков статистики ПС по этой фразе (копится с каждым «⟳ Данные»).
   window.api.psStatsHistory({ keywordId: kw.id, engine: S.engine }).then((rows) => {
     const box = $('#psHist', m);
     if (!box || !rows || !rows.length) return;
@@ -2622,6 +2679,49 @@ function openChartModal(kw) {
           <td>${r.position != null && r.shows > 0 ? Number(r.position).toFixed(1) : '—'}</td>
         </tr>`).join('')}
       </table>`;
+  }).catch(() => {});
+
+  window.api.metrikaHistory({ keywordId: kw.id, engine: S.engine }).then((rows) => {
+    const box = $('#metrikaHist', m);
+    if (!box || !rows || !rows.length) return;
+    const nearestPosition = (date) => {
+      const target = new Date(date).getTime();
+      let best = null;
+      for (const run of runs) {
+        const cell = (g.cells[kw.id] || {})[run.id];
+        if (!cell || cell.e || cell.p == null) continue;
+        const distance = Math.abs(new Date(run.started_at).getTime() - target);
+        if (!best || distance < best.distance) best = { position: cell.p, distance };
+      }
+      return best && best.distance <= 14 * 864e5 ? best.position : null;
+    };
+    const enriched = rows.map((row) => ({ ...row, nearPosition: nearestPosition(row.fetched_at) }));
+    let summary = '';
+    if (enriched.length >= 2) {
+      const current = enriched[0];
+      const previous = enriched[1];
+      const pos = current.nearPosition != null && previous.nearPosition != null
+        ? `Позиция ${previous.nearPosition || 'не в ТОП'} → ${current.nearPosition || 'не в ТОП'}. `
+        : '';
+      summary = `<div class="metrika-summary">${pos}Визиты ${fmtFreq(previous.visits)} → ${fmtFreq(current.visits)}.</div>`;
+    }
+    box.innerHTML = `
+      <div class="ps-hist-title">Трафик Яндекс Метрики по этой фразе</div>
+      ${summary}
+      <table class="ps-hist">
+        <tr><th>Обновлено</th><th>Позиция рядом</th><th>Визиты</th><th>Люди</th><th>Отказы</th><th>Глубина</th><th>Время</th><th>Цели</th></tr>
+        ${enriched.map((r) => `<tr>
+          <td>${fmtDate(r.fetched_at)}</td>
+          <td>${r.nearPosition == null ? '—' : (r.nearPosition || 'не в ТОП')}</td>
+          <td>${fmtFreq(r.visits)}</td>
+          <td>${fmtFreq(r.users)}</td>
+          <td>${Number(r.bounce_rate || 0).toFixed(1)}%</td>
+          <td>${Number(r.page_depth || 0).toFixed(1)}</td>
+          <td>${Math.round(Number(r.duration) || 0)} с</td>
+          <td>${Number(r.goal_reaches || 0).toLocaleString('ru-RU')}</td>
+        </tr>`).join('')}
+      </table>
+      <div class="hint">Метрика показывает только раскрытые поисковые фразы. Пустые запросы не считаются нулевыми и трафик по страницам сюда не подмешивается.</div>`;
   }).catch(() => {});
 }
 

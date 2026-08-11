@@ -582,6 +582,18 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
   white-space: nowrap;
 }
 
+.h-metrika,
+.c-metrika { border-left: 2px solid rgba(255, 204, 0, .35) !important; }
+
+.metrika-summary {
+  margin: 7px 0 9px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(255, 204, 0, .08);
+  color: var(--text);
+  font-size: 12px;
+}
+
 .sect-title {
   font-size: 12px;
   font-weight: 650;

@@ -64,6 +64,7 @@ assert.ok(yandexOnly.details.every((item) => item.engine === 'yandex'));
     const db = await DB.open(path.join(tempDir, 'test.sqlite'));
     assert.ok(db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'"));
     assert.ok(db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='project_notes'"));
+    assert.ok(db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='metrika_stats'"));
     db.run(
       `INSERT INTO request_log(project_id, kind, requests, started_at, status)
        VALUES(1, 'positions', 10, '2026-07-24T00:00:00', 'done')`

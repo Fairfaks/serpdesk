@@ -9,6 +9,7 @@ const DB = require('./lib/db');
 const xmlriver = require('./lib/xmlriver');
 const gsc = require('./lib/gsc');
 const yavm = require('./lib/yavm');
+const metrika = require('./lib/metrika');
 const historyImport = require('./lib/import-history');
 const analytics = require('./lib/analytics');
 const costs = require('./lib/costs');
@@ -117,6 +118,7 @@ const DEFAULT_SETTINGS = {
   autocheck_time: '07:00',
   autocheck_last_date: '',
   yavm_token: '',
+  metrika_token: '',
   gsc_key_path: '',
   gsc_client_id: '',
   gsc_client_secret: '',
@@ -150,6 +152,7 @@ const DEFAULT_CFG = {
   device: 'desktop',
   deviceMode: 'desktop', // desktop | mobile | both
   psDays: 28,
+  metrikaCounterId: '',
   competitors: [],
   yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false },
   google: { enabled: false, loc: '', country: '' },
@@ -563,7 +566,7 @@ async function retryErrors(projectId, engine, device = 'desktop') {
   })();
 }
 
-// ---------- реальная статистика поисковиков (GSC + ЯВМ) ----------
+// ---------- реальная статистика поисковиков (GSC + ЯВМ + Метрика) ----------
 
 const psJobs = new Set(); // projectId с идущим обновлением статистики
 
@@ -579,8 +582,9 @@ async function refreshPsStats(projectId) {
   const p = db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
   if (!p) throw new Error('Проект не найден');
   const s = getSettings();
-  if (!s.yavm_token && !s.gsc_key_path) {
-    throw new Error('Укажите токен Яндекс.Вебмастера и/или JSON-ключ Google в настройках');
+  const gauth = gsc.makeAuth(s);
+  if (!s.yavm_token && !gauth && !s.metrika_token) {
+    throw new Error('Подключите Яндекс.Вебмастер, Google Search Console и/или Яндекс Метрику в настройках');
   }
   const keywords = db.all('SELECT id, phrase FROM keywords WHERE project_id = ?', [projectId]);
   if (!keywords.length) throw new Error('В проекте нет фраз');
@@ -589,7 +593,7 @@ async function refreshPsStats(projectId) {
     const project = projectRow(p);
     const days = Number(project.cfg.psDays) || 28;
     const { from, to } = dateRange(days);
-    const out = { yandex: null, google: null, days };
+    const out = { yandex: null, google: null, metrika: null, days };
     // Каждая загрузка — снимок истории; повторная за тот же день заменяет сегодняшний.
     const record = (kwId, engine, st) => {
       db.run(
@@ -626,7 +630,6 @@ async function refreshPsStats(projectId) {
       }
     }
 
-    const gauth = gsc.makeAuth(s);
     if (gauth) {
       try {
         const sites = await gsc.listSites(gauth);
@@ -648,6 +651,59 @@ async function refreshPsStats(projectId) {
       }
     }
 
+    if (s.metrika_token) {
+      try {
+        const counters = await metrika.listCounters(s.metrika_token);
+        const counter = metrika.matchCounter(counters, p.domain, project.cfg.metrikaCounterId);
+        if (!counter) {
+          out.metrika = {
+            error: project.cfg.metrikaCounterId
+              ? `Счётчик ${project.cfg.metrikaCounterId} недоступен. Проверьте ID и права токена`
+              : `Счётчик для ${p.domain} не найден. Укажите его ID в настройках проекта`,
+          };
+        } else {
+          const report = await metrika.queryStats(s.metrika_token, counter.id, from, to);
+          const matched = { yandex: 0, google: 0 };
+          for (const engine of ['yandex', 'google']) {
+            const map = report.byEngine[engine];
+            for (const kw of keywords) {
+              const hit = map.get(metrika.normQuery(kw.phrase));
+              // Отсутствие строки означает в том числе скрытую фразу, а не нулевой трафик.
+              if (!hit) continue;
+              matched[engine]++;
+              db.run(
+                "DELETE FROM metrika_stats WHERE keyword_id = ? AND engine = ? AND days = ? AND date(fetched_at) = date('now')",
+                [kw.id, engine, days]
+              );
+              db.run(
+                `INSERT INTO metrika_stats(
+                   keyword_id, counter_id, engine, days, date_from, date_to, visits, users,
+                   bounce_rate, page_depth, duration, goal_reaches, sampled, sample_share, fetched_at
+                 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  kw.id, Number(counter.id), engine, days, from, to, hit.visits, hit.users,
+                  hit.bounceRate, hit.pageDepth, hit.duration, hit.goalReaches,
+                  report.sampled ? 1 : 0, report.sampleShare, nowIso(),
+                ]
+              );
+            }
+          }
+          out.metrika = {
+            matchedYandex: matched.yandex,
+            matchedGoogle: matched.google,
+            total: keywords.length,
+            rows: report.rows,
+            counterId: Number(counter.id),
+            counterName: counter.name || counter.site || String(counter.id),
+            sampled: report.sampled,
+            sampleShare: report.sampleShare,
+          };
+        }
+      } catch (e) {
+        out.metrika = { error: e.message };
+      }
+    }
+
     db.flush();
     return out;
   } finally {
@@ -657,7 +713,7 @@ async function refreshPsStats(projectId) {
 
 async function testPsAccess() {
   const s = getSettings();
-  const out = { yavm: null, gsc: null };
+  const out = { yavm: null, gsc: null, metrika: null };
   if (s.yavm_token) {
     try {
       const uid = await yavm.getUserId(s.yavm_token);
@@ -674,6 +730,14 @@ async function testPsAccess() {
       out.gsc = { ok: true, sites: sites.length, mode: s.gsc_refresh_token ? 'oauth' : 'key' };
     } catch (e) {
       out.gsc = { ok: false, error: e.message };
+    }
+  }
+  if (s.metrika_token) {
+    try {
+      const counters = await metrika.listCounters(s.metrika_token);
+      out.metrika = { ok: true, counters: counters.length };
+    } catch (e) {
+      out.metrika = { ok: false, error: e.message };
     }
   }
   return out;
@@ -729,6 +793,22 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
       at: r.fetched_at, d: r.days, df: r.date_from, dt: r.date_to,
     };
   }
+  const metrikaStats = {};
+  for (const r of db.all(
+    `SELECT keyword_id, counter_id, engine, days, date_from, date_to, visits, users,
+            bounce_rate, page_depth, duration, goal_reaches, sampled, sample_share, fetched_at
+     FROM metrika_stats
+     WHERE keyword_id IN (SELECT id FROM keywords WHERE project_id = ?)
+     ORDER BY fetched_at ASC`,
+    [projectId]
+  )) {
+    (metrikaStats[r.keyword_id] ||= {})[r.engine] = {
+      v: r.visits, u: r.users, b: r.bounce_rate, p: r.page_depth,
+      t: r.duration, g: r.goal_reaches, at: r.fetched_at,
+      d: r.days, df: r.date_from, dt: r.date_to,
+      sampled: Boolean(r.sampled), share: r.sample_share, counter: r.counter_id,
+    };
+  }
   // Конкуренты: список из настроек проекта + их позиции по последнему прогону.
   const proj = db.get('SELECT cfg FROM projects WHERE id = ?', [projectId]);
   let competitors = [];
@@ -756,6 +836,7 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
     keywords,
     cells,
     stats,
+    metrika: metrikaStats,
     notes: db.all(
       `SELECT id, note_date, title, body, category, created_at
        FROM project_notes WHERE project_id = ? ORDER BY note_date ASC, id ASC`,
@@ -784,7 +865,7 @@ function fmtDate(iso, withTime = true) {
 async function exportCsv(projectId, engine, device = 'desktop') {
   const p = db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
   if (!p) throw new Error('Проект не найден');
-  const { runs, keywords, cells, stats } = getGrid(projectId, engine, device, 1000);
+  const { runs, keywords, cells, stats, metrika: metrikaRows } = getGrid(projectId, engine, device, 1000);
   const engName = engine === 'yandex' ? 'yandex' : 'google';
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
     defaultPath: `${p.domain}-${engName}-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -798,15 +879,21 @@ async function exportCsv(projectId, engine, device = 'desktop') {
   };
   const hasFreq = keywords.some((k) => k.freq !== null && k.freq !== undefined);
   const hasStats = keywords.some((k) => stats[k.id]?.[engine]);
+  const hasMetrika = keywords.some((k) => metrikaRows[k.id]?.[engine]);
   const statHead = hasStats ? ['Показы 28д', 'Клики 28д', 'CTR', 'Ср.поз ПС'] : [];
+  const metrikaHead = hasMetrika ? ['Визиты Метрика', 'Пользователи Метрика', 'Отказы Метрика', 'Цели Метрика'] : [];
   const lines = [];
-  lines.push(['Фраза', ...(hasFreq ? ['Частота'] : []), ...statHead, ...runs.map((r) => fmtDate(r.started_at))].map(esc).join(sep));
+  lines.push(['Фраза', ...(hasFreq ? ['Частота'] : []), ...statHead, ...metrikaHead, ...runs.map((r) => fmtDate(r.started_at))].map(esc).join(sep));
   for (const kw of keywords) {
     const row = [kw.phrase];
     if (hasFreq) row.push(kw.freq ?? '');
     if (hasStats) {
       const st = stats[kw.id]?.[engine];
       row.push(st ? st.s : '', st ? st.c : '', st ? (st.r * 100).toFixed(1) + '%' : '', st && st.p != null ? st.p.toFixed(1) : '');
+    }
+    if (hasMetrika) {
+      const st = metrikaRows[kw.id]?.[engine];
+      row.push(st ? st.v : '', st ? st.u : '', st ? Number(st.b).toFixed(1) + '%' : '', st ? st.g : '');
     }
     for (const r of runs) {
       const c = (cells[kw.id] || {})[r.id];
@@ -897,11 +984,13 @@ function diagnosticSections() {
     runs: count('runs'),
     results: count('results'),
     request_log_entries: count('request_log'),
+    metrika_snapshots: count('metrika_stats'),
     running_checks: runners.size,
   };
   const connections = {
     xmlriver_configured: Boolean(settings.xmlriver_user && settings.xmlriver_key),
     yandex_webmaster_configured: Boolean(settings.yavm_token),
+    yandex_metrika_configured: Boolean(settings.metrika_token),
     gsc_oauth_configured: Boolean(settings.gsc_client_id && settings.gsc_refresh_token),
     gsc_service_account_configured: Boolean(settings.gsc_key_path),
     concurrency: Number(settings.concurrency) || 3,
@@ -1044,6 +1133,7 @@ function registerIpc() {
     db.run('DELETE FROM request_log WHERE project_id = ?', [id]);
     db.run('DELETE FROM project_notes WHERE project_id = ?', [id]);
     db.run('DELETE FROM ps_stats WHERE keyword_id IN (SELECT id FROM keywords WHERE project_id = ?)', [id]);
+    db.run('DELETE FROM metrika_stats WHERE keyword_id IN (SELECT id FROM keywords WHERE project_id = ?)', [id]);
     db.run('DELETE FROM keywords WHERE project_id = ?', [id]);
     db.run('DELETE FROM projects WHERE id = ?', [id]);
     return { ok: true };
@@ -1119,6 +1209,7 @@ function registerIpc() {
       db.run('DELETE FROM results WHERE keyword_id = ?', [id]);
       db.run('DELETE FROM competitor_results WHERE keyword_id = ?', [id]);
       db.run('DELETE FROM ps_stats WHERE keyword_id = ?', [id]);
+      db.run('DELETE FROM metrika_stats WHERE keyword_id = ?', [id]);
       db.run('DELETE FROM keywords WHERE id = ?', [id]);
     }
     return { ok: true, deleted: cleanIds.length };
@@ -1138,6 +1229,13 @@ function registerIpc() {
   h('psstats:history', ({ keywordId, engine }) => db.all(
     `SELECT days, date_from, date_to, shows, clicks, ctr, position, fetched_at
      FROM ps_stats WHERE keyword_id = ? AND engine = ? ORDER BY fetched_at DESC LIMIT 60`,
+    [keywordId, engine]
+  ));
+
+  h('metrika:history', ({ keywordId, engine }) => db.all(
+    `SELECT counter_id, days, date_from, date_to, visits, users, bounce_rate, page_depth,
+            duration, goal_reaches, sampled, sample_share, fetched_at
+     FROM metrika_stats WHERE keyword_id = ? AND engine = ? ORDER BY fetched_at DESC LIMIT 60`,
     [keywordId, engine]
   ));
 

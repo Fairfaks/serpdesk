@@ -14,12 +14,13 @@ assert(!clean.includes('oauth-secret'));
 assert(clean.includes('key=[скрыто]'));
 
 const report = diagnostics.buildReport({
-  Настройки: { xmlriver_key: secret, password: 'another-secret', gsc_client_secret: 'GOCSPX-abcdef123' },
+  Настройки: { xmlriver_key: secret, password: 'another-secret', gsc_client_secret: 'GOCSPX-abcdef123', metrika_token: 'metrika-secret' },
   Состояние: { projects: 3 },
 });
 assert(!report.includes(secret));
 assert(!report.includes('GOCSPX-abcdef123'));
 assert(!report.includes('another-secret'));
+assert(!report.includes('metrika-secret'));
 assert(report.includes('"projects": 3'));
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serpdesk-diag-'));
