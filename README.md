@@ -47,9 +47,9 @@ API [XMLRiver](https://xmlriver.com), история в SQLite, цветная �
 
 | Файл | Платформа |
 |---|---|
-| `SerpDesk-1.5.8-mac-arm64.dmg` | macOS (Apple Silicon) |
-| `SerpDesk-1.5.8-win-x64-setup.exe` | Windows-инсталлятор |
-| `SerpDesk-1.5.8-win-x64-portable.exe` | Windows portable (без установки) |
+| `SerpDesk-1.5.9-mac-arm64.dmg` | macOS (Apple Silicon) |
+| `SerpDesk-1.5.9-win-x64-setup.exe` | Windows-инсталлятор |
+| `SerpDesk-1.5.9-win-x64-portable.exe` | Windows portable (без установки) |
 
 Сборки не подписаны сертификатами: macOS при первом запуске скачанного файла может
 сообщить, что приложение повреждено. В таком случае сначала перетащите SerpDesk в

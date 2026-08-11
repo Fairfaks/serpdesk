@@ -697,6 +697,7 @@ async function refreshPsStats(projectId) {
             counterName: counter.name || counter.site || String(counter.id),
             sampled: report.sampled,
             sampleShare: report.sampleShare,
+            goalsAvailable: report.goalsAvailable,
           };
         }
       } catch (e) {
@@ -893,7 +894,7 @@ async function exportCsv(projectId, engine, device = 'desktop') {
     }
     if (hasMetrika) {
       const st = metrikaRows[kw.id]?.[engine];
-      row.push(st ? st.v : '', st ? st.u : '', st ? Number(st.b).toFixed(1) + '%' : '', st ? st.g : '');
+      row.push(st ? st.v : '', st ? st.u : '', st ? Number(st.b).toFixed(1) + '%' : '', st && st.g != null ? st.g : '');
     }
     for (const r of runs) {
       const c = (cells[kw.id] || {})[r.id];

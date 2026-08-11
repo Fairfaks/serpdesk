@@ -36,5 +36,46 @@ assert.deepStrictEqual(parsed.byEngine.yandex.get('купить елку'), {
   pageDepth: 2.3, duration: 91, goalReaches: 3,
 });
 assert.strictEqual(parsed.byEngine.google.get('buy tree').visits, 9);
+assert.strictEqual(metrika.isFavoriteGoalsError(new Error("favorite_goals is not enabled for 53717134")), true);
 
-console.log('metrika.test.js: OK');
+(async () => {
+  const originalFetch = global.fetch;
+  const urls = [];
+  try {
+    global.fetch = async (url) => {
+      urls.push(String(url));
+      if (urls.length === 1) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            message: "Wrong parameter: 'metric', value: 'ym:s:favoriteGoalsReaches', message: favorite_goals is not enabled",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            dimensions: [{ name: 'купить ёлку' }, { name: 'Яндекс' }],
+            metrics: [12, 10, 7.5, 2.1, 83],
+          }],
+        }),
+      };
+    };
+    const fallback = await metrika.queryStats('token', 53717134, '2026-07-01', '2026-07-28');
+    assert.strictEqual(urls.length, 2, 'отчёт должен повториться без избранных целей');
+    assert(urls[0].includes('favoriteGoalsReaches'));
+    assert(!urls[1].includes('favoriteGoalsReaches'));
+    assert.strictEqual(fallback.goalsAvailable, false);
+    assert.strictEqual(fallback.byEngine.yandex.get('купить елку').visits, 12);
+    assert.strictEqual(fallback.byEngine.yandex.get('купить елку').goalReaches, null);
+    console.log('metrika.test.js: OK');
+  } finally {
+    global.fetch = originalFetch;
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

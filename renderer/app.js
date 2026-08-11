@@ -94,7 +94,7 @@ if (!window.api) {
     listBackups: async () => [],
     restoreBackup: async () => ({ restored: false }),
     exportDiagnostics: async () => ({ saved: false }),
-    refreshPsStats: async () => ({ yandex: { matched: 7, total: 8 }, google: { matched: 7, total: 8 }, metrika: { matchedYandex: 5, matchedGoogle: 5, total: 8 }, days: 28 }),
+    refreshPsStats: async () => ({ yandex: { matched: 7, total: 8 }, google: { matched: 7, total: 8 }, metrika: { matchedYandex: 5, matchedGoogle: 5, total: 8, goalsAvailable: true }, days: 28 }),
     testPsAccess: async () => ({ yavm: { ok: true, hosts: 3 }, gsc: { ok: true, sites: 5 }, metrika: { ok: true, counters: 2 } }),
     psStatsHistory: async () => ([
       { days: 28, date_from: '2026-06-25', date_to: '2026-07-23', shows: 1240, clicks: 86, ctr: 0.069, position: 3.2, fetched_at: '2026-07-23T10:00:00Z' },
@@ -1143,7 +1143,7 @@ function renderGrid() {
         return `<td class="c-stat c-metrika" title="${esc(tip)}">${fmtFreq(st.v)}</td>
           <td class="c-stat" title="${esc(tip)}">${fmtFreq(st.u)}</td>
           <td class="c-stat" title="${esc(tip)}">${Number(st.b || 0).toFixed(1)}%</td>
-          <td class="c-stat" title="${esc(tip)}">${Number(st.g || 0).toLocaleString('ru-RU')}</td>`;
+          <td class="c-stat" title="${esc(tip)}">${st.g == null ? '' : Number(st.g).toLocaleString('ru-RU')}</td>`;
       })() : ''}
       ${colSpacer(colStart)}
       ${tds}
@@ -2008,7 +2008,7 @@ async function refreshPs() {
     if (r.google) msg.push(r.google.error ? `GSC: ${r.google.error}` : `GSC: найдено ${r.google.matched} из ${r.google.total} фраз`);
     if (r.metrika) msg.push(r.metrika.error
       ? `Метрика: ${r.metrika.error}`
-      : `Метрика: Яндекс ${r.metrika.matchedYandex}, Google ${r.metrika.matchedGoogle} из ${r.metrika.total} фраз`);
+      : `Метрика: Яндекс ${r.metrika.matchedYandex}, Google ${r.metrika.matchedGoogle} из ${r.metrika.total} фраз${r.metrika.goalsAvailable === false ? ', без целей' : ''}`);
     const hasErr = (r.yandex && r.yandex.error) || (r.google && r.google.error) || (r.metrika && r.metrika.error);
     toast(msg.join(' · ') || 'Нечего обновлять', hasErr ? 'err' : 'ok');
     await loadGrid();
@@ -2718,7 +2718,7 @@ function openChartModal(kw) {
           <td>${Number(r.bounce_rate || 0).toFixed(1)}%</td>
           <td>${Number(r.page_depth || 0).toFixed(1)}</td>
           <td>${Math.round(Number(r.duration) || 0)} с</td>
-          <td>${Number(r.goal_reaches || 0).toLocaleString('ru-RU')}</td>
+          <td>${r.goal_reaches == null ? '—' : Number(r.goal_reaches).toLocaleString('ru-RU')}</td>
         </tr>`).join('')}
       </table>
       <div class="hint">Метрика показывает только раскрытые поисковые фразы. Пустые запросы не считаются нулевыми и трафик по страницам сюда не подмешивается.</div>`;
