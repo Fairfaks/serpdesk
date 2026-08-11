@@ -124,7 +124,14 @@ const S = {
   progress: null,       // {engine, done, total, phrase, position}
   freqProg: null,       // {done, total}
   balance: null,
-  view: { q: '', searchMode: 'contains', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' },
+  view: {
+    q: '',
+    searchMode: 'contains',
+    tag: null,
+    sort: { key: 'phrase', runId: null, dir: 1 },
+    mode: 'grid',
+    analyticsExpanded: {},
+  },
   dyn: { metric: 'top', tops: { 3: true, 5: true, 10: true, 30: true } }, // состояние графиков «Динамики»
   regions: { metric: 'avg', loading: false, data: null, error: null },
   cmp: { a: null, b: null },                                     // выбранные прогоны для «Сравнения»
@@ -147,6 +154,7 @@ let visibleKeywordsCache = null;
 let gridMetaCache = null;
 let keywordSearchTimer = null;
 const PHRASE_COLUMN_WIDTH = 420;
+const ANALYTICS_SORT_KEYS = new Set(['shows', 'clicks', 'realpos', 'mvisits', 'musers', 'mbounce', 'mgoals']);
 
 // CTR органики по позиции (усреднённая кривая Яндекс/Google) — для видимости и трафик-прогноза.
 const CTR_CURVE = [0, 0.30, 0.15, 0.10, 0.07, 0.05, 0.04, 0.032, 0.026, 0.021, 0.018];
@@ -385,6 +393,31 @@ function gridMeta() {
   return gridMetaCache;
 }
 
+function analyticsViewKey() {
+  return `${S.activeId || 0}:${S.engine}:${S.device}`;
+}
+
+function analyticsColumnsMeta(meta = gridMeta()) {
+  const description = window.SerpDeskAnalyticsColumns.describe(S.engine, meta.hasStats, meta.hasMetrika);
+  return {
+    ...description,
+    expanded: description.available && Boolean((S.view.analyticsExpanded || {})[analyticsViewKey()]),
+  };
+}
+
+function toggleAnalyticsColumns() {
+  const key = analyticsViewKey();
+  S.view.analyticsExpanded = S.view.analyticsExpanded || {};
+  const expanded = !Boolean(S.view.analyticsExpanded[key]);
+  S.view.analyticsExpanded[key] = expanded;
+  if (!expanded && ANALYTICS_SORT_KEYS.has(S.view.sort.key)) {
+    S.view.sort = { key: 'phrase', runId: null, dir: 1 };
+  }
+  S.virtual.colStart = 0;
+  S.virtual.scrollLeft = 0;
+  refreshGrid();
+}
+
 function setSort(key, runId = null) {
   const s = S.view.sort;
   if (s.key === key && s.runId === runId) {
@@ -474,7 +507,14 @@ function renderSidebar() {
       localStorage.setItem('activeId', S.activeId);
       S.progress = null;
       S.freqProg = null;
-      S.view = { q: '', searchMode: 'contains', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' };
+      S.view = {
+        q: '',
+        searchMode: 'contains',
+        tag: null,
+        sort: { key: 'phrase', runId: null, dir: 1 },
+        mode: 'grid',
+        analyticsExpanded: {},
+      };
       S.cmp = { a: null, b: null };
       syncEngineToProject();
       await loadGrid();
@@ -780,6 +820,8 @@ function bindGridEvents() {
     refreshGrid({ focusSearch: true });
   };
 
+  const analyticsToggle = $('#btnAnalyticsToggle', box);
+  if (analyticsToggle) analyticsToggle.onclick = toggleAnalyticsColumns;
   const copyVisible = $('#btnCopyVisible', box);
   if (copyVisible) copyVisible.onclick = () => copyKeywords(visibleKeywords());
   const copySelected = $('#btnCopySelected', box);
@@ -857,7 +899,10 @@ function bindGridEvents() {
     }
     const rowCount = visibleKeywords().length;
     const meta = gridMeta();
-    const fixedWidth = PHRASE_COLUMN_WIDTH + (meta.hasFreq ? 80 : 0) + (meta.hasStats ? 240 : 0) + (meta.hasMetrika ? 280 : 0);
+    const analytics = analyticsColumnsMeta(meta);
+    const fixedWidth = PHRASE_COLUMN_WIDTH + (meta.hasFreq ? 80 : 0) +
+      (analytics.expanded && meta.hasStats ? 240 : 0) +
+      (analytics.expanded && meta.hasMetrika ? 280 : 0);
     let scheduled = false;
     wrap.onscroll = () => {
       S.virtual.scrollTop = wrap.scrollTop;
@@ -1012,6 +1057,12 @@ function renderGrid() {
   }
   const runs = g.runs;
   const displayRuns = runs.slice().reverse();
+  const meta = gridMeta();
+  const analytics = analyticsColumnsMeta(meta);
+  if (!analytics.expanded && ANALYTICS_SORT_KEYS.has(S.view.sort.key)) {
+    S.view.sort = { key: 'phrase', runId: null, dir: 1 };
+    visibleKeywordsCache = null;
+  }
   const kws = visibleKeywords();
   const rowStart = Math.max(0, Math.min(S.virtual.rowStart, Math.max(0, kws.length - 1)));
   const rowEnd = Math.min(kws.length, rowStart + S.virtual.rowWindow);
@@ -1023,7 +1074,9 @@ function renderGrid() {
   const colSpacer = (count, tag = 'td') => count > 0
     ? `<${tag} class="v-col-space" style="width:${count * 72}px;min-width:${count * 72}px"></${tag}>`
     : '';
-  const { hasFreq, hasStats, statAt, hasMetrika, metrikaAt } = gridMeta();
+  const { hasFreq, hasStats, statAt, hasMetrika, metrikaAt } = meta;
+  const showStats = analytics.expanded && hasStats;
+  const showMetrika = analytics.expanded && hasMetrika;
   const psDays = activeProject().cfg.psDays || 28;
   const psName = S.engine === 'yandex' ? 'Яндекс.Вебмастера' : 'Search Console';
   const statTip = `Реальная статистика из ${psName} за ${psDays} дней${statAt ? ' · обновлено ' + fmtDateFull(statAt) : ''}. История копится с каждым «⟳ Данные» — смотри в графике фразы.`;
@@ -1038,6 +1091,11 @@ function renderGrid() {
       <button class="btn btn-danger" id="btnDeleteSelected">Удалить выбранные</button>
       <button class="btn btn-ghost" id="btnClearSelected">Снять выделение</button>
     ` : ''}
+    ${analytics.available ? `<button class="btn analytics-toggle" id="btnAnalyticsToggle" aria-expanded="${analytics.expanded}"
+      title="${analytics.expanded ? 'Скрыть' : 'Показать'} столбцы: ${esc(analytics.columns)}">
+      <span aria-hidden="true">${analytics.expanded ? '▴' : '▾'}</span>
+      ${analytics.expanded ? 'Скрыть данные' : 'Данные'}: ${esc(analytics.label)}
+    </button>` : ''}
     <button class="btn" id="btnCopyVisible">⧉ Копировать ${filtered ? 'видимые' : 'все'}</button>
   </div>`;
   const betaBanner = S.engine === 'yandex' && activeProject().cfg.yandex.serpFeaturesBeta
@@ -1059,11 +1117,11 @@ function renderGrid() {
       </span>
     </th>
     ${hasFreq ? `<th class="h-freq" data-sort="freq" title="Частотность Вордстат">Частота${sortArrow('freq')}</th>` : ''}
-    ${hasStats ? `
+    ${showStats ? `
       <th class="h-stat" data-sort="shows" title="${esc(statTip)}">Показы·${psDays}д${sortArrow('shows')}</th>
       <th class="h-stat" data-sort="clicks" title="${esc(statTip)}">Клики·${psDays}д${sortArrow('clicks')}</th>
       <th class="h-stat" data-sort="realpos" title="${esc(statTip)} — средняя позиция по реальным показам">Поз.ПС${sortArrow('realpos')}</th>` : ''}
-    ${hasMetrika ? `
+    ${showMetrika ? `
       <th class="h-stat h-metrika" data-sort="mvisits" title="${esc(metrikaTip)}">Визиты·М${sortArrow('mvisits')}</th>
       <th class="h-stat" data-sort="musers" title="${esc(metrikaTip)}">Люди·М${sortArrow('musers')}</th>
       <th class="h-stat" data-sort="mbounce" title="${esc(metrikaTip)}">Отказы·М${sortArrow('mbounce')}</th>
@@ -1126,7 +1184,7 @@ function renderGrid() {
         </span>
       </td>
       ${hasFreq ? `<td class="c-freq">${fmtFreq(kw.freq)}</td>` : ''}
-      ${hasStats ? (() => {
+      ${showStats ? (() => {
         const st = g.stats && g.stats[kw.id] && g.stats[kw.id][S.engine];
         if (!st) return '<td class="c-stat"></td><td class="c-stat"></td><td class="c-stat"></td>';
         const period = st.df && st.dt ? `${st.df} — ${st.dt}` : `${st.d || psDays} дней`;
@@ -1135,7 +1193,7 @@ function renderGrid() {
           <td class="c-stat" title="${esc(tip)}">${fmtFreq(st.c)}</td>
           <td class="c-stat" title="${esc(tip)}">${st.p != null && st.s > 0 ? st.p.toFixed(1) : ''}</td>`;
       })() : ''}
-      ${hasMetrika ? (() => {
+      ${showMetrika ? (() => {
         const st = g.metrika && g.metrika[kw.id] && g.metrika[kw.id][S.engine];
         if (!st) return '<td class="c-stat c-metrika"></td><td class="c-stat"></td><td class="c-stat"></td><td class="c-stat"></td>';
         const period = st.df && st.dt ? `${st.df} — ${st.dt}` : `${st.d || psDays} дней`;
@@ -1156,7 +1214,7 @@ function renderGrid() {
     ? `<tr><td class="c-phrase" style="color:var(--muted2)">Проверок ещё не было — нажмите «Обновить»</td></tr>`
     : '';
 
-  const staticColumns = 1 + (hasFreq ? 1 : 0) + (hasStats ? 3 : 0) + (hasMetrika ? 4 : 0);
+  const staticColumns = 1 + (hasFreq ? 1 : 0) + (showStats ? 3 : 0) + (showMetrika ? 4 : 0);
   const totalColumns = staticColumns + visibleRuns.length + (colStart > 0 ? 1 : 0) + (colEnd < displayRuns.length ? 1 : 0);
   const topSpacer = rowStart > 0
     ? `<tr class="v-row-space"><td colspan="${totalColumns}" style="height:${rowStart * S.virtual.rowHeight}px"></td></tr>`

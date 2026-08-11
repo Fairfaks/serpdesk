@@ -463,12 +463,28 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .kw-bulkbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-height: 39px;
   padding: 10px 20px 0;
 }
 .kw-bulkbar + .grid-wrap { margin-top: 10px; }
 .kw-bulkbar .btn { padding: 5px 10px; font-size: 11.5px; }
+.kw-bulkbar .analytics-toggle {
+  border-style: dashed;
+  color: var(--muted);
+}
+.kw-bulkbar .analytics-toggle:hover,
+.kw-bulkbar .analytics-toggle[aria-expanded="true"] {
+  color: var(--text);
+  border-color: rgba(79, 140, 255, .55);
+  background: rgba(79, 140, 255, .08);
+}
+.kw-bulkbar .analytics-toggle span {
+  display: inline-block;
+  width: 10px;
+  color: var(--accent-h);
+}
 .kw-bulk-summary {
   margin-right: auto;
   color: var(--muted);
