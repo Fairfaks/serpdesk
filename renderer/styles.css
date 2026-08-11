@@ -590,6 +590,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
   padding-top: 13px;
   margin-top: 2px;
 }
+.sect-title.no-border { border-top: 0; padding-top: 0; }
+.update-options .engine-block { display: flex; flex-direction: column; gap: 10px; }
+.update-checks { display: flex; gap: 22px; flex-wrap: wrap; }
+.update-options .btn { align-self: flex-start; }
 
 .pos {
   display: inline-flex;

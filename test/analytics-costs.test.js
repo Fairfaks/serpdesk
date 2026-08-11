@@ -52,6 +52,10 @@ const estimate = applyPrices(estimateProjectRequests(project, 100), { yandex: 20
 assert.strictEqual(estimate.requests, 800, 'Яндекс: 2×100, Google: 2×100×3 страницы');
 assert.strictEqual(estimate.cost, 22);
 assert.strictEqual(estimate.details.length, 4);
+const yandexOnly = applyPrices(estimateProjectRequests(project, 100, ['yandex']), { yandex: 20 });
+assert.strictEqual(yandexOnly.requests, 200, 'выбор Яндекса не должен включать запросы Google');
+assert.strictEqual(yandexOnly.cost, 4);
+assert.ok(yandexOnly.details.every((item) => item.engine === 'yandex'));
 
 (async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serpdesk-business-test-'));

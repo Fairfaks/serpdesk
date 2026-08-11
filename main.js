@@ -14,6 +14,7 @@ const analytics = require('./lib/analytics');
 const costs = require('./lib/costs');
 const backups = require('./lib/backups');
 const diagnostics = require('./lib/diagnostics');
+const { copyProjectKeywords, normalizeIds } = require('./lib/project-copy');
 const { CheckRunner } = require('./lib/checker');
 
 // ---------- автообновления (electron-updater + GitHub Releases) ----------
@@ -198,6 +199,15 @@ function projectDevices(project) {
   return mode === 'both' ? ['desktop', 'mobile'] : [mode === 'mobile' ? 'mobile' : 'desktop'];
 }
 
+function projectEngines(project, requested = null) {
+  const enabled = [];
+  if (project.cfg.yandex.enabled) enabled.push('yandex');
+  if (project.cfg.google.enabled) enabled.push('google');
+  if (!Array.isArray(requested)) return enabled;
+  const wanted = new Set(requested.filter((engine) => engine === 'yandex' || engine === 'google'));
+  return enabled.filter((engine) => wanted.has(engine));
+}
+
 // ---------- видео-финал ----------
 
 // Ролик зашит локально (assets/victory.mp4) — YouTube не нужен, работает офлайн.
@@ -235,7 +245,7 @@ async function getXmlPrices(cr, engines) {
   return prices;
 }
 
-async function estimateCheck(projectId) {
+async function estimateCheck(projectId, requestedEngines = null) {
   const row = db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
   if (!row) throw new Error('Проект не найден');
   const project = projectRow(row);
@@ -243,9 +253,9 @@ async function estimateCheck(projectId) {
   if (!cr.user || !cr.key) throw new Error('Укажите user и key XMLRiver в настройках');
   const keywordCount = db.get('SELECT COUNT(*) AS c FROM keywords WHERE project_id = ?', [projectId])?.c || 0;
   if (!keywordCount) throw new Error('В проекте нет фраз');
-  const estimate = costs.estimateProjectRequests(project, keywordCount);
-  if (!estimate.details.length) throw new Error('В проекте не включён ни один поисковик');
-  const engines = [...new Set(estimate.details.map((item) => item.engine))];
+  const engines = projectEngines(project, requestedEngines);
+  if (!engines.length) throw new Error('Выберите хотя бы один включённый поисковик');
+  const estimate = costs.estimateProjectRequests(project, keywordCount, engines);
   const prices = await getXmlPrices(cr, engines);
   const priced = costs.applyPrices(estimate, prices);
   let balance = null;
@@ -280,7 +290,7 @@ function notifyProjectChanges(project, engine, device) {
   showProjectNotification(project, engine, device, analytics.summarizeImportant(analysis));
 }
 
-async function startCheck(projectId) {
+async function startCheck(projectId, requestedEngines = null) {
   if (runners.has(projectId)) throw new Error('Проверка по этому проекту уже идёт');
   const p = db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
   if (!p) throw new Error('Проект не найден');
@@ -289,12 +299,10 @@ async function startCheck(projectId) {
   if (!cr.user || !cr.key) throw new Error('Укажите user и key XMLRiver в настройках');
   const keywords = db.all('SELECT id, phrase FROM keywords WHERE project_id = ? ORDER BY id', [projectId]);
   if (!keywords.length) throw new Error('В проекте нет фраз');
-  const engines = [];
-  if (project.cfg.yandex.enabled) engines.push('yandex');
-  if (project.cfg.google.enabled) engines.push('google');
-  if (!engines.length) throw new Error('В проекте не включён ни один поисковик');
+  const engines = projectEngines(project, requestedEngines);
+  if (!engines.length) throw new Error('Выберите хотя бы один включённый поисковик');
   const prices = await getXmlPrices(cr, engines);
-  const estimate = costs.applyPrices(costs.estimateProjectRequests(project, keywords.length), prices);
+  const estimate = costs.applyPrices(costs.estimateProjectRequests(project, keywords.length, engines), prices);
 
   const s = getSettings();
   const competitors = (project.cfg.competitors || []).filter(Boolean);
@@ -409,16 +417,19 @@ async function startCheck(projectId) {
 
 const freqJobs = new Set(); // projectId с идущим сбором
 
-function startFreqJob(projectId) {
-  if (freqJobs.has(projectId)) return false;
+function startFreqJob(projectId, { refreshAll = false } = {}) {
+  if (freqJobs.has(projectId)) return { started: false, reason: 'running', total: 0 };
   const cr = creds();
-  if (!cr.user || !cr.key) return false;
+  if (!cr.user || !cr.key) throw new Error('Укажите user и key XMLRiver в настройках');
   const p = db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
-  if (!p) return false;
+  if (!p) throw new Error('Проект не найден');
   const project = projectRow(p);
   const regions = project.cfg.yandex.lr || '';
-  const kws = db.all('SELECT id, phrase FROM keywords WHERE project_id = ? AND freq IS NULL', [projectId]);
-  if (!kws.length) return false;
+  const kws = db.all(
+    `SELECT id, phrase FROM keywords WHERE project_id = ?${refreshAll ? '' : ' AND freq IS NULL'} ORDER BY id`,
+    [projectId]
+  );
+  if (!kws.length) return { started: false, reason: 'nothing-to-update', total: 0 };
   freqJobs.add(projectId);
 
   (async () => {
@@ -434,7 +445,7 @@ function startFreqJob(projectId) {
       [
         projectId, kws.length, pricePer1000,
         pricePer1000 == null ? null : kws.length * pricePer1000 / 1000,
-        nowIso(), JSON.stringify({ keywords: kws.length, regions }),
+        nowIso(), JSON.stringify({ keywords: kws.length, regions, refreshAll }),
       ]
     );
     const queue = kws.slice();
@@ -466,7 +477,7 @@ function startFreqJob(projectId) {
     db.flush();
     send('freq:done', { projectId, total: kws.length, failed });
   })();
-  return true;
+  return { started: true, total: kws.length, refreshAll };
 }
 
 // ---------- дочекивание ошибок ----------
@@ -994,6 +1005,32 @@ function registerIpc() {
     return { id: r.lastID };
   });
 
+  h('projects:duplicate', ({ sourceId, name, domain, subdomains, cfg, keywordMode, keywordIds }) => {
+    const source = db.get('SELECT id FROM projects WHERE id = ?', [sourceId]);
+    if (!source) throw new Error('Исходный проект не найден');
+    const host = xmlriver.normalizeHost(domain);
+    if (!host || !host.includes('.')) throw new Error('Укажите корректный домен');
+    if (!cfg?.yandex?.enabled && !cfg?.google?.enabled) throw new Error('Включите хотя бы один поисковик');
+    const mode = ['all', 'selected', 'empty'].includes(keywordMode) ? keywordMode : 'all';
+    if (mode === 'selected') {
+      const selected = normalizeIds(keywordIds);
+      const sourceIds = new Set(db.all('SELECT id FROM keywords WHERE project_id = ?', [sourceId]).map((row) => Number(row.id)));
+      if (![...selected].some((id) => sourceIds.has(id))) throw new Error('Сначала выделите запросы, которые нужно перенести');
+    }
+    const cleanName = String(name || '').trim() || `${host} — копия`;
+    const project = db.run(
+      'INSERT INTO projects(name, domain, subdomains, cfg, created_at) VALUES(?, ?, ?, ?, ?)',
+      [cleanName, host, subdomains ? 1 : 0, JSON.stringify(cfg), nowIso()]
+    );
+    const keywordCount = copyProjectKeywords(db, {
+      sourceId, targetId: project.lastID, mode, keywordIds, createdAt: nowIso(),
+    });
+    diagnosticLog('info', 'Project duplicated', {
+      sourceProjectId: sourceId, projectId: project.lastID, keywordMode: mode, keywords: keywordCount,
+    });
+    return { id: project.lastID, keywordCount };
+  });
+
   h('projects:delete', ({ id }) => {
     const runner = runners.get(id);
     if (runner) runner.cancel();
@@ -1032,8 +1069,8 @@ function registerIpc() {
         ]);
       }
     }
-    if (collectFreq) startFreqJob(projectId);
-    return { added, freqStarted: !!collectFreq };
+    const freqJob = collectFreq ? startFreqJob(projectId) : { started: false };
+    return { added, freqStarted: freqJob.started };
   });
 
   h('keywords:set-target', ({ id, url }) => {
@@ -1041,10 +1078,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  h('keywords:collect-freq', ({ projectId }) => {
-    const started = startFreqJob(projectId);
-    return { started };
-  });
+  h('keywords:collect-freq', ({ projectId, refreshAll }) => startFreqJob(projectId, { refreshAll: Boolean(refreshAll) }));
 
   h('check:retry', async ({ projectId, engine, device }) => {
     await retryErrors(projectId, engine, device || 'desktop');
@@ -1106,8 +1140,8 @@ function registerIpc() {
     getGrid(projectId, engine, device || 'desktop', limit || 20, cursor || null)
   ));
 
-  h('check:start', async ({ projectId }) => { await startCheck(projectId); return { ok: true }; });
-  h('check:estimate', ({ projectId }) => estimateCheck(projectId));
+  h('check:start', async ({ projectId, engines }) => { await startCheck(projectId, engines); return { ok: true }; });
+  h('check:estimate', ({ projectId, engines }) => estimateCheck(projectId, engines));
 
   h('check:cancel', ({ projectId }) => {
     const r = runners.get(projectId);

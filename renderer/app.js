@@ -51,6 +51,7 @@ if (!window.api) {
       cfg: { depth: 30, device: 'desktop', deviceMode: 'both', psDays: 28, competitors: ['rival-one.ru', 'rival-two.ru'], yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: true, loc: '', country: '' } },
     }],
     saveProject: async () => ({ id: 1 }),
+    duplicateProject: async () => ({ id: 2, keywordCount: demoKws.length }),
     deleteProject: async () => ({ ok: true }),
     addKeywords: async () => ({ added: 0 }),
     pickImportFile: async () => ({ canceled: true }),
@@ -504,12 +505,13 @@ function renderMain() {
           ${errN && !running ? `<button class="btn btn-warn" id="btnRetry" title="Перепроверить только фразы с ошибкой в последнем столбце">Дочекать ошибки (${errN})</button>` : ''}
           ${running
             ? `<button class="btn btn-danger" id="btnCancel">Остановить</button>`
-            : `<button class="btn btn-primary" id="btnCheck">Проверить позиции</button>`}
+            : `<button class="btn btn-primary" id="btnUpdate">Обновить</button>`}
           <button class="btn" id="btnAddKw">+ Запросы</button>
           <button class="btn" id="btnImportHistory" title="Импортировать фразы вместе с историческими позициями из XLSX или CSV">Импорт истории…</button>
           <button class="btn" id="btnPs" title="Подтянуть реальные показы/клики/позиции из Яндекс.Вебмастера и Google Search Console за 28 дней">⟳ ПС</button>
           <button class="btn" id="btnReport" title="Красивый отчёт (PDF / печать)">Отчёт</button>
           <button class="btn" id="btnCsv" title="Экспорт CSV">CSV</button>
+          <button class="icon-btn" id="btnDuplicateProj" title="Дублировать проект">⧉</button>
           <button class="icon-btn" id="btnEditProj" title="Настройки проекта">✎</button>
         </div>
       </div>
@@ -547,7 +549,7 @@ function renderMain() {
   `;
 
   if (running) $('#btnCancel').onclick = () => window.api.cancelCheck({ projectId: p.id });
-  else $('#btnCheck').onclick = startCheck;
+  else $('#btnUpdate').onclick = openUpdateModal;
   const rBtn = $('#btnRetry');
   if (rBtn) rBtn.onclick = retryErrors;
   $('#btnAddKw').onclick = openKeywordsModal;
@@ -558,6 +560,7 @@ function renderMain() {
     catch (e) { toast(e.message.replace(/^.*Error: /, ''), 'err'); }
   };
   $('#btnCsv').onclick = doExport;
+  $('#btnDuplicateProj').onclick = () => openProjectModal(p, { duplicate: true });
   $('#btnEditProj').onclick = () => openProjectModal(p);
 
   main.querySelectorAll('.vnav').forEach((b) => {
@@ -1090,7 +1093,7 @@ function renderGrid() {
   }).join('');
 
   const emptyRuns = !runs.length
-    ? `<tr><td class="c-phrase" style="color:var(--muted2)">Проверок ещё не было — нажмите «Проверить позиции»</td></tr>`
+    ? `<tr><td class="c-phrase" style="color:var(--muted2)">Проверок ещё не было — нажмите «Обновить»</td></tr>`
     : '';
 
   const staticColumns = 1 + (hasFreq ? 1 : 0) + (hasStats ? 3 : 0);
@@ -1533,7 +1536,7 @@ function bindCompetitorEvents() {
 
 /* ============ действия ============ */
 
-async function startCheck() {
+function openUpdateModal() {
   const p = activeProject();
   if (!p) return;
   if (!S.settings.xmlriver_user || !S.settings.xmlriver_key) {
@@ -1541,8 +1544,82 @@ async function startCheck() {
     openSettingsModal();
     return;
   }
+  const enabled = [
+    p.cfg.yandex.enabled ? 'yandex' : null,
+    p.cfg.google.enabled ? 'google' : null,
+  ].filter(Boolean);
+  const missingFreq = (S.grid?.keywords || []).filter((keyword) => keyword.freq == null).length;
+  const m = openModal(`
+    <div class="modal-head"><h2>Обновить — ${esc(p.name)}</h2><button class="icon-btn" id="mClose">✕</button></div>
+    <div class="modal-body update-options">
+      <div class="engine-block">
+        <div class="sect-title no-border">Позиции</div>
+        <div class="hint">Выберите, по каким поисковикам снять новые позиции.</div>
+        <div class="update-checks">
+          ${enabled.includes('yandex') ? '<label class="check"><input type="checkbox" class="update-engine" value="yandex" checked> Яндекс</label>' : ''}
+          ${enabled.includes('google') ? '<label class="check"><input type="checkbox" class="update-engine" value="google" checked> Google</label>' : ''}
+        </div>
+        <button class="btn btn-primary" id="mUpdatePositions">Рассчитать и обновить позиции</button>
+      </div>
+      <div class="engine-block">
+        <div class="sect-title no-border">Частотность Wordstat</div>
+        <div class="hint">Регион берётся из настроек Яндекса этого проекта: lr=${esc(p.cfg.yandex.lr || 'без региона')}.</div>
+        <label class="check"><input type="radio" name="freqMode" value="all" checked> Пересобрать для всех запросов (${p.keywordCount})</label>
+        <label class="check"><input type="radio" name="freqMode" value="missing"> Только без частотности (${missingFreq})</label>
+        <div class="hint" id="freqEstimate"></div>
+        <button class="btn" id="mUpdateFreq">Обновить частотность</button>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="mCancel">Закрыть</button></div>
+  `);
+  $('#mClose', m.parentElement).onclick = closeModal;
+  $('#mCancel', m).onclick = closeModal;
+  const syncFreqEstimate = () => {
+    const all = m.querySelector('input[name="freqMode"]:checked').value === 'all';
+    const requests = all ? p.keywordCount : missingFreq;
+    const price = S.balance?.ok && S.balance.costYandex != null
+      ? requests * Number(S.balance.costYandex) / 1000
+      : null;
+    $('#freqEstimate', m).textContent = `${requests} запросов к XMLRiver${price == null ? '' : ` · примерно ${price.toFixed(2)} ₽`}`;
+  };
+  m.querySelectorAll('input[name="freqMode"]').forEach((radio) => { radio.onchange = syncFreqEstimate; });
+  syncFreqEstimate();
+  $('#mUpdatePositions', m).onclick = async () => {
+    const engines = [...m.querySelectorAll('.update-engine:checked')].map((input) => input.value);
+    if (!engines.length) { toast('Выберите хотя бы один поисковик', 'err'); return; }
+    closeModal();
+    await startCheck(engines);
+  };
+  $('#mUpdateFreq', m).onclick = async () => {
+    const refreshAll = m.querySelector('input[name="freqMode"]:checked').value === 'all';
+    const button = $('#mUpdateFreq', m);
+    button.disabled = true;
+    button.textContent = 'Запускаю…';
+    try {
+      const result = await window.api.collectFreq({ projectId: p.id, refreshAll });
+      if (!result.started) {
+        button.disabled = false;
+        button.textContent = 'Обновить частотность';
+        toast(result.reason === 'running' ? 'Частотность этого проекта уже обновляется' : 'Обновлять нечего', 'ok');
+        return;
+      }
+      closeModal();
+      S.freqProg = { done: 0, total: result.total };
+      renderMain();
+      toast(`Собираю частотность: ${result.total} запросов`);
+    } catch (e) {
+      button.disabled = false;
+      button.textContent = 'Обновить частотность';
+      toast(e.message.replace(/^.*Error: /, ''), 'err');
+    }
+  };
+}
+
+async function startCheck(engines) {
+  const p = activeProject();
+  if (!p) return;
   try {
-    const estimate = await window.api.estimateCheck({ projectId: p.id });
+    const estimate = await window.api.estimateCheck({ projectId: p.id, engines });
     const engName = (engine) => engine === 'yandex' ? 'Яндекс' : 'Google';
     const devName = (device) => device === 'mobile' ? 'мобайл' : 'десктоп';
     const money = (value) => value == null ? 'цена недоступна' : `${Number(value).toFixed(2)} ₽`;
@@ -1572,17 +1649,17 @@ async function startCheck() {
     $('#mCancel', m).onclick = closeModal;
     $('#mRun', m).onclick = async () => {
       closeModal();
-      await launchCheck(p);
+      await launchCheck(p, engines);
     };
   } catch (e) {
     toast(e.message.replace(/^.*Error: /, ''), 'err');
   }
 }
 
-async function launchCheck(p) {
+async function launchCheck(p, engines) {
   try {
-    S.progress = { engine: S.engine, done: 0, total: p.keywordCount, phrase: '', position: null };
-    await window.api.startCheck({ projectId: p.id });
+    S.progress = { engine: engines[0] || S.engine, done: 0, total: p.keywordCount, phrase: '', position: null };
+    await window.api.startCheck({ projectId: p.id, engines });
     await loadProjects();
     render();
   } catch (e) {
@@ -1913,16 +1990,20 @@ async function openBackupsModal() {
 
 /* ---- проект ---- */
 
-function openProjectModal(p) {
-  const isNew = !p;
+function openProjectModal(p, options = {}) {
+  const isDuplicate = Boolean(options.duplicate && p);
+  const isNew = !p || isDuplicate;
   const cfg = p ? p.cfg : { depth: 30, device: 'desktop', yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: false, loc: '', country: '' } };
+  const selectedCount = isDuplicate ? S.selectedKeywordIds.size : 0;
+  const title = isDuplicate ? 'Дублировать проект' : isNew ? 'Новый проект' : 'Настройки проекта';
+  const initialName = isDuplicate ? `${p.name} — копия` : p ? p.name : '';
   const m = openModal(`
-    <div class="modal-head"><h2>${isNew ? 'Новый проект' : 'Настройки проекта'}</h2><button class="icon-btn" id="mClose">✕</button></div>
+    <div class="modal-head"><h2>${title}</h2><button class="icon-btn" id="mClose">✕</button></div>
     <div class="modal-body">
       <div class="row2">
         <div class="field">
           <label>Название</label>
-          <input type="text" id="fName" value="${esc(p ? p.name : '')}" placeholder="Мой сайт">
+          <input type="text" id="fName" value="${esc(initialName)}" placeholder="Мой сайт">
         </div>
         <div class="field">
           <label>Домен</label>
@@ -1991,11 +2072,18 @@ function openProjectModal(p) {
         <textarea id="fCompetitors" style="min-height:70px" placeholder="competitor1.ru&#10;competitor2.ru">${esc((cfg.competitors || []).join('\n'))}</textarea>
         <div class="hint">Их позиции снимаются из той же выдачи. Внимание: с конкурентами проверка листает выдачу до полной глубины (ранняя остановка отключается) — это дороже по запросам XMLRiver.</div>
       </div>
+      ${isDuplicate ? `<div class="engine-block">
+        <div class="sect-title no-border">Какие запросы перенести</div>
+        <label class="check"><input type="radio" name="copyKeywords" value="all" checked> Все запросы исходного проекта (${p.keywordCount})</label>
+        <label class="check"><input type="radio" name="copyKeywords" value="selected" ${selectedCount ? '' : 'disabled'}> Только выделенные в таблице (${selectedCount})</label>
+        <label class="check"><input type="radio" name="copyKeywords" value="empty"> Создать без запросов, добавлю новые</label>
+        <div class="hint">История позиций не копируется. Частотность будет пустой, потому что она зависит от региона нового проекта.</div>
+      </div>` : ''}
     </div>
     <div class="modal-foot">
       ${!isNew ? '<button class="btn btn-danger spacer" id="mDelete">Удалить проект</button>' : ''}
       <button class="btn" id="mCancel">Отмена</button>
-      <button class="btn btn-primary" id="mSave">${isNew ? 'Создать' : 'Сохранить'}</button>
+      <button class="btn btn-primary" id="mSave">${isDuplicate ? 'Создать копию' : isNew ? 'Создать' : 'Сохранить'}</button>
     </div>
   `);
   $('#mClose', m.parentElement).onclick = closeModal;
@@ -2022,7 +2110,7 @@ function openProjectModal(p) {
   }
   $('#mSave', m).onclick = async () => {
     const data = {
-      id: p ? p.id : undefined,
+      id: !isNew && p ? p.id : undefined,
       name: $('#fName', m).value.trim(),
       domain: $('#fDomain', m).value.trim(),
       subdomains: $('#fSub', m).checked,
@@ -2045,7 +2133,15 @@ function openProjectModal(p) {
     if (!data.domain) { toast('Укажите домен', 'err'); return; }
     if (!data.cfg.yandex.enabled && !data.cfg.google.enabled) { toast('Включите хотя бы один поисковик', 'err'); return; }
     try {
-      const r = await window.api.saveProject(data);
+      const keywordMode = isDuplicate ? m.querySelector('input[name="copyKeywords"]:checked').value : null;
+      const r = isDuplicate
+        ? await window.api.duplicateProject({
+            ...data,
+            sourceId: p.id,
+            keywordMode,
+            keywordIds: [...S.selectedKeywordIds],
+          })
+        : await window.api.saveProject(data);
       closeModal();
       await loadProjects(false);
       S.activeId = r.id;
@@ -2054,7 +2150,10 @@ function openProjectModal(p) {
       syncEngineToProject();
       await loadGrid();
       render();
-      if (isNew) openKeywordsModal();
+      if (isDuplicate) {
+        toast(`Проект создан${r.keywordCount ? `, перенесено запросов: ${r.keywordCount}` : ''}`, 'ok');
+        if (keywordMode === 'empty') openKeywordsModal();
+      } else if (isNew) openKeywordsModal();
     } catch (e) {
       toast(e.message.replace(/^.*Error: /, ''), 'err');
     }

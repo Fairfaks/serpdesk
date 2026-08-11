@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   getBalance: invoke('balance:get'),
   listProjects: invoke('projects:list'),
   saveProject: invoke('projects:save'),
+  duplicateProject: invoke('projects:duplicate'),
   deleteProject: invoke('projects:delete'),
   addKeywords: invoke('keywords:add'),
   deleteKeywords: invoke('keywords:delete'),
