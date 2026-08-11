@@ -492,9 +492,10 @@ function bucketClass(p) {
   return 'b4';
 }
 
-function lastRunErrors() {
+function lastRunPending() {
   const g = S.grid;
   if (!g || !g.runs.length) return 0;
+  if (g.resume) return Number(g.resume.pending) || 0;
   const lastId = g.runs[g.runs.length - 1].id;
   return g.keywords.filter((k) => (g.cells[k.id] || {})[lastId]?.e).length;
 }
@@ -516,7 +517,7 @@ function renderMain() {
 
   const running = p.running;
   const cfg = p.cfg;
-  const errN = lastRunErrors();
+  const pendingRun = S.grid?.resume || null;
   const alertCount = S.grid?.analysis?.importantCount || 0;
   const tags = [...new Set((S.grid?.keywords || []).map((k) => k.tag).filter(Boolean))];
   const canCompareRegions = regionProjects().length >= 2;
@@ -529,7 +530,7 @@ function renderMain() {
         <span class="chip">глубина ТОП-${cfg.depth}</span>
         ${S.freqProg ? `<span class="chip chip-accent" id="freqChip">Вордстат: ${S.freqProg.done}/${S.freqProg.total}</span>` : ''}
         <div class="head-actions">
-          ${errN && !running ? `<button class="btn btn-warn" id="btnRetry" title="Перепроверить только фразы с ошибкой в последнем столбце">Дочекать ошибки (${errN})</button>` : ''}
+          ${pendingRun && !running ? `<button class="btn btn-warn" id="btnRetry" title="Продолжить последний прогон в том же столбце: не собрано ${pendingRun.missing}, с ошибкой ${pendingRun.errors}">Дособрать (${pendingRun.pending})</button>` : ''}
           ${running
             ? `<button class="btn btn-danger" id="btnCancel">Остановить</button>`
             : `<button class="btn btn-primary" id="btnUpdate">Обновить</button>`}
@@ -1945,7 +1946,7 @@ async function openRequestLogModal() {
   const totalRequests = rows.reduce((sum, row) => sum + Number(row.requests || 0), 0);
   const knownCosts = rows.filter((row) => row.actual_cost != null);
   const totalCost = knownCosts.reduce((sum, row) => sum + Number(row.actual_cost || 0), 0);
-  const kindName = (kind) => kind === 'wordstat' ? 'Частотность' : kind === 'positions-retry' ? 'Дочек ошибок' : 'Позиции';
+  const kindName = (kind) => kind === 'wordstat' ? 'Частотность' : kind === 'positions-retry' ? 'Досбор позиций' : 'Позиции';
   const engineName = (engine) => engine === 'yandex' ? 'Яндекс' : engine === 'google' ? 'Google' : '—';
   const m = openModal(`
     <div class="modal-head"><h2>Журнал XMLRiver</h2><button class="icon-btn" id="mClose">✕</button></div>
@@ -1980,7 +1981,7 @@ async function retryErrors() {
   const p = activeProject();
   if (!p) return;
   try {
-    S.progress = { engine: S.engine, done: 0, total: lastRunErrors(), phrase: '', position: null };
+    S.progress = { engine: S.engine, done: 0, total: lastRunPending(), phrase: '', position: null };
     await window.api.retryErrors({ projectId: p.id, engine: S.engine, device: S.device });
     await loadProjects();
     render();
@@ -2834,7 +2835,9 @@ window.api.on('run:state', async (e) => {
 
 window.api.on('run:done', async (e) => {
   if (e.error) toast('Проверка прервана: ' + e.error, 'err');
-  else if (e.retried) toast(`Ошибки перепроверены. Запросов: ${e.requests}`, 'ok');
+  else if (e.retried && e.remaining) toast(`Досбор остановлен. Осталось: ${e.remaining}. Запросов: ${e.requests}`);
+  else if (e.retried) toast(`Досбор завершён в том же столбце. Запросов: ${e.requests}`, 'ok');
+  else if (e.cancelled) toast('Сбор остановлен. Уже полученные позиции сохранены, остаток можно дособрать.');
   else toast(`Проверка завершена. Запросов к XMLRiver: ${e.requests}${e.cost != null ? ` · ${Number(e.cost).toFixed(2)} ₽` : ''}`, 'ok');
   refreshBalance();
   if (e.projectId === S.activeId) { await loadGrid(); await loadProjects(); render(); }

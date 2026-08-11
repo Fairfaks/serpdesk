@@ -15,6 +15,7 @@ const analytics = require('./lib/analytics');
 const costs = require('./lib/costs');
 const backups = require('./lib/backups');
 const diagnostics = require('./lib/diagnostics');
+const runResume = require('./lib/run-resume');
 const { copyProjectKeywords, normalizeIds } = require('./lib/project-copy');
 const { CheckRunner } = require('./lib/checker');
 
@@ -410,6 +411,7 @@ async function startCheck(projectId, requestedEngines = null) {
       requests: runner.requestsMade,
       cost: hasKnownCost ? actualCost : null,
       error: failMessage,
+      cancelled: runner.cancelled,
     });
     if (failMessage) showProjectNotification(project, null, null, failMessage, true);
     if (!failMessage && !runner.cancelled) showVictory();
@@ -483,7 +485,7 @@ function startFreqJob(projectId, { refreshAll = false } = {}) {
   return { started: true, total: kws.length, refreshAll };
 }
 
-// ---------- дочекивание ошибок ----------
+// ---------- досбор незавершённого прогона ----------
 
 async function retryErrors(projectId, engine, device = 'desktop') {
   if (runners.has(projectId)) throw new Error('Проверка по этому проекту уже идёт');
@@ -497,11 +499,8 @@ async function retryErrors(projectId, engine, device = 'desktop') {
     [projectId, engine, device]
   );
   if (!run) throw new Error('По этому поисковику ещё не было проверок');
-  const errored = db.all(
-    'SELECT r.id AS result_id, k.id, k.phrase FROM results r JOIN keywords k ON k.id = r.keyword_id WHERE r.run_id = ? AND r.error IS NOT NULL',
-    [run.id]
-  );
-  if (!errored.length) throw new Error('В последней проверке нет ошибок');
+  const pending = runResume.pendingKeywords(db, run.id, projectId);
+  if (!pending.length) throw new Error('В последней проверке нечего дособирать');
 
   const s = getSettings();
   const runner = new CheckRunner({
@@ -511,26 +510,43 @@ async function retryErrors(projectId, engine, device = 'desktop') {
     concurrency: Number(s.concurrency) || 3,
     domain: project.domain,
     subdomains: project.subdomains,
-    keywords: errored.map((e) => ({ id: e.id, phrase: e.phrase })),
-    onProgress: (eng, info) => send('run:progress', { projectId, engine: eng, ...info }),
+    keywords: pending.map((item) => ({ id: item.id, phrase: item.phrase })),
+    onProgress: (eng, info) => send('run:progress', { projectId, engine: eng, device, ...info }),
     onResult: (eng, kwId, res) => {
-      const row = errored.find((e) => e.id === kwId);
-      if (row) {
+      const row = pending.find((item) => item.id === kwId);
+      if (!row) return;
+      if (row.result_id) {
         db.run('UPDATE results SET position = ?, url = ?, error = ?, visual_position = ?, serp_features = ? WHERE id = ?', [
           res.position, res.url, res.error, res.visualPosition ?? null,
           res.serpFeatures ? JSON.stringify(res.serpFeatures) : null, row.result_id,
         ]);
+      } else {
+        db.run(
+          'INSERT INTO results(run_id, keyword_id, position, url, error, visual_position, serp_features) VALUES(?, ?, ?, ?, ?, ?, ?)',
+          [run.id, kwId, res.position, res.url, res.error, res.visualPosition ?? null,
+            res.serpFeatures ? JSON.stringify(res.serpFeatures) : null]
+        );
+      }
+      db.run('DELETE FROM competitor_results WHERE run_id = ? AND keyword_id = ?', [run.id, kwId]);
+      if (res.competitors) {
+        for (const [domain, position] of Object.entries(res.competitors)) {
+          db.run(
+            'INSERT OR REPLACE INTO competitor_results(run_id, keyword_id, domain, position) VALUES(?, ?, ?, ?)',
+            [run.id, kwId, domain, position]
+          );
+        }
       }
     },
   });
   runners.set(projectId, runner);
+  db.run("UPDATE runs SET status = 'running', finished_at = NULL WHERE id = ?", [run.id]);
   send('run:state', { projectId, running: true });
 
   (async () => {
     let failMessage = null;
     let pricePer1000 = null;
     try { pricePer1000 = await xmlriver.getCost(cr, engine); } catch {}
-    const maxRequests = errored.length * costs.maxRequestsPerKeyword(engine, project.cfg);
+    const maxRequests = pending.length * costs.maxRequestsPerKeyword(engine, project.cfg);
     const log = db.run(
       `INSERT INTO request_log(
          project_id, run_id, kind, engine, device, estimated_requests, price_per_1000,
@@ -539,30 +555,36 @@ async function retryErrors(projectId, engine, device = 'desktop') {
       [
         projectId, run.id, engine, device, maxRequests, pricePer1000,
         pricePer1000 == null ? null : maxRequests * pricePer1000 / 1000,
-        nowIso(), JSON.stringify({ keywords: errored.length, depth: project.cfg.depth }),
+        nowIso(), JSON.stringify({ keywords: pending.length, depth: project.cfg.depth, resume: true }),
       ]
     );
+    let cancelled = false;
     try {
       await runner.runEngine(engine);
     } catch (e) {
-      if (!e || e.name !== 'Cancelled') failMessage = e.message;
+      if (e && e.name === 'Cancelled') cancelled = true;
+      else failMessage = e?.message || String(e || 'Неизвестная ошибка');
     }
-    const left = db.get('SELECT COUNT(*) AS c FROM results WHERE run_id = ? AND error IS NOT NULL', [run.id]);
-    if (left && left.c === 0) db.run("UPDATE runs SET status = 'done' WHERE id = ?", [run.id]);
+    const remaining = runResume.pendingKeywords(db, run.id, projectId).length;
+    const status = remaining === 0 ? 'done' : cancelled ? 'cancelled' : failMessage ? 'failed' : 'partial';
+    db.run('UPDATE runs SET status = ?, finished_at = ? WHERE id = ?', [status, nowIso(), run.id]);
     db.run(
       `UPDATE request_log SET requests = ?, actual_cost = ?, finished_at = ?, status = ?
        WHERE id = ?`,
       [
         runner.requestsMade,
         pricePer1000 == null ? null : runner.requestsMade * pricePer1000 / 1000,
-        nowIso(), failMessage ? 'failed' : 'done', log.lastID,
+        nowIso(), status, log.lastID,
       ]
     );
     runners.delete(projectId);
     db.flush();
     send('run:state', { projectId, running: false });
-    send('run:engine-done', { projectId, engine, status: 'done' });
-    send('run:done', { projectId, requests: runner.requestsMade, error: failMessage, retried: true });
+    send('run:engine-done', { projectId, engine, device, status });
+    send('run:done', {
+      projectId, requests: runner.requestsMade, error: failMessage,
+      retried: true, remaining, cancelled,
+    });
   })();
 }
 
@@ -832,6 +854,19 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
     runs,
     Math.max(projectDepth, 100)
   );
+  let resume = null;
+  if (!cursor && runs.length) {
+    const latestRun = runs[runs.length - 1];
+    const pending = runResume.summary(db, latestRun.id, projectId);
+    if (pending.pending) {
+      resume = {
+        runId: latestRun.id,
+        status: latestRun.status,
+        startedAt: latestRun.started_at,
+        ...pending,
+      };
+    }
+  }
   return {
     runs,
     keywords,
@@ -846,6 +881,7 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
     competitors,
     compPos,
     analysis,
+    resume,
     pagination: {
       hasMore,
       nextCursor: hasMore && oldest ? { startedAt: oldest.started_at, id: oldest.id } : null,
@@ -1517,6 +1553,14 @@ if (!gotLock) {
     try { backups.createDailyBackup(dbPath); }
     catch (error) { diagnosticLog('error', 'Daily backup failed', { message: error.message, stack: error.stack }); }
     db = await DB.open(dbPath);
+    // После аварийного закрытия в базе могли остаться «running»-прогоны.
+    // Они уже не выполняются, поэтому показываем их как прерванные и разрешаем досбор.
+    const interruptedAt = nowIso();
+    const orphanedRuns = runResume.recoverInterrupted(db, interruptedAt);
+    if (orphanedRuns) {
+      db.flush();
+      diagnosticLog('info', 'Interrupted runs recovered', { count: orphanedRuns });
+    }
     registerIpc();
     buildMenu();
     createWindow();
