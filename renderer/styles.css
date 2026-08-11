@@ -949,6 +949,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .dyn-tab.off { opacity: .4; }
 
 .dyn-legend { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.dyn-tools { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; color: var(--muted2); font-size: 11.5px; }
 .lg-btn {
   font: inherit; font-size: 12px;
   background: var(--panel); border: 1px solid var(--border-soft);
@@ -990,6 +991,22 @@ table.insight-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--border-s
 table.insight-tbl td:first-child { color: var(--text); }
 table.insight-tbl .gain { color: var(--green-soft); font-weight: 650; }
 table.insight-tbl .bad { color: var(--red); font-weight: 650; }
+.url-dynamics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.url-dyn-head { display: block; font-size: 12px; margin: 0 8px 5px; }
+
+.regions-wrap { padding: 16px 20px 24px; overflow-y: auto; flex: 1; }
+.beta-notice { background: rgba(79, 140, 255, .08); border: 1px solid rgba(79, 140, 255, .25); color: var(--muted); border-radius: 9px; padding: 10px 12px; margin-bottom: 14px; line-height: 1.45; }
+.region-legend { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
+.region-pill { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+.region-pill i { width: 9px; height: 9px; border-radius: 50%; }
+
+@media (max-width: 1050px) { .url-dynamics-grid { grid-template-columns: 1fr; } }
+
+.note-list { display: flex; flex-direction: column; gap: 7px; max-height: 240px; overflow-y: auto; }
+.note-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--bg); }
+.note-row > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.note-row b { font-size: 12.5px; }
+.note-row span, .note-row small, .note-empty { color: var(--muted2); font-size: 11px; line-height: 1.4; }
 
 /* ---------- вид «Сравнение» ---------- */
 

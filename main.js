@@ -756,6 +756,11 @@ function getGrid(projectId, engine, device = 'desktop', limit = 20, cursor = nul
     keywords,
     cells,
     stats,
+    notes: db.all(
+      `SELECT id, note_date, title, body, category, created_at
+       FROM project_notes WHERE project_id = ? ORDER BY note_date ASC, id ASC`,
+      [projectId]
+    ),
     competitors,
     compPos,
     analysis,
@@ -1037,6 +1042,7 @@ function registerIpc() {
     db.run('DELETE FROM results WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)', [id]);
     db.run('DELETE FROM runs WHERE project_id = ?', [id]);
     db.run('DELETE FROM request_log WHERE project_id = ?', [id]);
+    db.run('DELETE FROM project_notes WHERE project_id = ?', [id]);
     db.run('DELETE FROM ps_stats WHERE keyword_id IN (SELECT id FROM keywords WHERE project_id = ?)', [id]);
     db.run('DELETE FROM keywords WHERE project_id = ?', [id]);
     db.run('DELETE FROM projects WHERE id = ?', [id]);
@@ -1079,6 +1085,26 @@ function registerIpc() {
   });
 
   h('keywords:collect-freq', ({ projectId, refreshAll }) => startFreqJob(projectId, { refreshAll: Boolean(refreshAll) }));
+
+  h('notes:add', ({ projectId, date, title, body, category }) => {
+    const noteDate = String(date || '').trim();
+    const cleanTitle = String(title || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(noteDate)) throw new Error('Укажите дату заметки');
+    if (!cleanTitle) throw new Error('Напишите короткий заголовок');
+    if (cleanTitle.length > 160) throw new Error('Заголовок слишком длинный');
+    const cleanCategory = ['change', 'release', 'search', 'other'].includes(category) ? category : 'change';
+    const result = db.run(
+      `INSERT INTO project_notes(project_id, note_date, title, body, category, created_at)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+      [projectId, noteDate, cleanTitle, String(body || '').trim() || null, cleanCategory, nowIso()]
+    );
+    return { id: result.lastID };
+  });
+
+  h('notes:delete', ({ projectId, id }) => {
+    const result = db.run('DELETE FROM project_notes WHERE id = ? AND project_id = ?', [Number(id), Number(projectId)]);
+    return { ok: true, deleted: result.changes };
+  });
 
   h('check:retry', async ({ projectId, engine, device }) => {
     await retryErrors(projectId, engine, device || 'desktop');

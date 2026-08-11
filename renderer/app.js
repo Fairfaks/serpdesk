@@ -47,8 +47,11 @@ if (!window.api) {
     setSettings: async (s) => s,
     getBalance: async () => ({ ok: true, balance: 1234.56, costYandex: 28, costGoogle: 25 }),
     listProjects: async () => [{
-      id: 1, name: 'Демо-проект', domain: 'example.ru', subdomains: true, keywordCount: demoKws.length, running: false,
+      id: 1, name: 'Демо · Москва', domain: 'example.ru', subdomains: true, keywordCount: demoKws.length, running: false,
       cfg: { depth: 30, device: 'desktop', deviceMode: 'both', psDays: 28, competitors: ['rival-one.ru', 'rival-two.ru'], yandex: { enabled: true, lr: '213', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: true, loc: '', country: '' } },
+    }, {
+      id: 2, name: 'Демо · Петербург', domain: 'example.ru', subdomains: true, keywordCount: demoKws.length, running: false,
+      cfg: { depth: 30, device: 'desktop', deviceMode: 'both', psDays: 28, competitors: [], yandex: { enabled: true, lr: '2', domain: 'ru', source: 'api', serpFeaturesBeta: false }, google: { enabled: true, loc: '', country: '' } },
     }],
     saveProject: async () => ({ id: 1 }),
     duplicateProject: async () => ({ id: 2, keywordCount: demoKws.length }),
@@ -60,6 +63,8 @@ if (!window.api) {
     copyText: async () => ({ ok: true }),
     setKeywordTarget: async () => ({ ok: true }),
     collectFreq: async () => ({ started: false }),
+    addNote: async ({ date, title, body, category }) => ({ id: Date.now(), date, title, body, category }),
+    deleteNote: async () => ({ ok: true, deleted: 1 }),
     estimateCheck: async () => ({ keywordCount: demoKws.length, requests: demoKws.length, cost: 4.6, balance: 1234.56, details: [] }),
     listRequestLogs: async () => [],
     openTelegram: async () => ({ ok: true }),
@@ -70,7 +75,7 @@ if (!window.api) {
         compPos[k.id] = { 'rival-one.ru': [1, 4, 2, 8, 12, 5, 0, 15][i] || 0, 'rival-two.ru': [6, 9, 7, 3, 0, 11, 4, 8][i] || 0 };
       });
       return {
-        runs: demoRuns, keywords: demoKws, cells, stats: demoStats,
+        runs: demoRuns, keywords: demoKws, cells, stats: demoStats, notes: [],
         competitors: ['rival-one.ru', 'rival-two.ru'], compPos,
         pagination: { hasMore: false, nextCursor: null, pageSize: 20 },
       };
@@ -109,7 +114,8 @@ const S = {
   freqProg: null,       // {done, total}
   balance: null,
   view: { q: '', searchMode: 'contains', tag: null, sort: { key: 'phrase', runId: null, dir: 1 }, mode: 'grid' },
-  dyn: { metric: 'top', tops: { 3: true, 10: true, 30: true } }, // состояние графиков «Динамики»
+  dyn: { metric: 'top', tops: { 3: true, 5: true, 10: true, 30: true } }, // состояние графиков «Динамики»
+  regions: { metric: 'avg', loading: false, data: null, error: null },
   cmp: { a: null, b: null },                                     // выбранные прогоны для «Сравнения»
   historyLoading: false,
   selectedKeywordIds: new Set(),
@@ -493,6 +499,7 @@ function renderMain() {
   const errN = lastRunErrors();
   const alertCount = S.grid?.analysis?.importantCount || 0;
   const tags = [...new Set((S.grid?.keywords || []).map((k) => k.tag).filter(Boolean))];
+  const canCompareRegions = regionProjects().length >= 2;
 
   main.innerHTML = `
     <div class="head">
@@ -521,6 +528,7 @@ function renderMain() {
         <button class="vnav ${S.view.mode === 'dynamics' ? 'active' : ''}" data-mode="dynamics">Динамика</button>
         <button class="vnav ${S.view.mode === 'compare' ? 'active' : ''}" data-mode="compare">Сравнение</button>
         ${(cfg.competitors && cfg.competitors.length) ? `<button class="vnav ${S.view.mode === 'competitors' ? 'active' : ''}" data-mode="competitors">Конкуренты</button>` : ''}
+        ${canCompareRegions ? `<button class="vnav ${S.view.mode === 'regions' ? 'active' : ''}" data-mode="regions">Регионы <small>β</small></button>` : ''}
       </div>
       <div class="tabs-row">
         <div class="tabs">
@@ -545,6 +553,7 @@ function renderMain() {
     ` : S.view.mode === 'changes' ? renderChanges()
       : S.view.mode === 'dynamics' ? renderDynamics()
       : S.view.mode === 'competitors' ? renderCompetitors()
+      : S.view.mode === 'regions' ? renderRegions()
       : renderCompare()}
   `;
 
@@ -564,9 +573,10 @@ function renderMain() {
   $('#btnEditProj').onclick = () => openProjectModal(p);
 
   main.querySelectorAll('.vnav').forEach((b) => {
-    b.onclick = () => {
+    b.onclick = async () => {
       if (S.view.mode === b.dataset.mode) return;
       S.view.mode = b.dataset.mode;
+      if (S.view.mode === 'regions') await loadRegionsData();
       renderMain();
     };
   });
@@ -578,8 +588,10 @@ function renderMain() {
       const enabled = eng === 'yandex' ? cfg.yandex.enabled : cfg.google.enabled;
       if (!enabled) { toast('Этот поисковик выключен в настройках проекта', 'err'); return; }
       S.engine = eng;
+      S.regions.data = null;
       S.view.sort = { key: 'phrase', runId: null, dir: 1 };
       await loadGrid();
+      if (S.view.mode === 'regions') await loadRegionsData();
       renderMain();
     };
   });
@@ -588,7 +600,9 @@ function renderMain() {
     t.onclick = async () => {
       if (t.dataset.dev === S.device) return;
       S.device = t.dataset.dev;
+      S.regions.data = null;
       await loadGrid();
+      if (S.view.mode === 'regions') await loadRegionsData();
       renderMain();
     };
   });
@@ -606,6 +620,7 @@ function renderMain() {
   else if (S.view.mode === 'dynamics') bindDynamicsEvents();
   else if (S.view.mode === 'compare') bindCompareEvents();
   else if (S.view.mode === 'competitors') bindCompetitorEvents();
+  else if (S.view.mode === 'regions') bindRegionEvents();
 }
 
 function refreshGrid(options = {}) {
@@ -873,8 +888,7 @@ function renderHistoryPager() {
 }
 
 // Сводные метрики одного прогона по всем фразам проекта.
-function runStats(runId) {
-  const g = S.grid;
+function gridRunStats(g, runId) {
   let top3 = 0, top5 = 0, top10 = 0, top30 = 0, topAll = 0, sum = 0, found = 0;
   let visSum = 0, traffic = 0, freqKnown = false;
   for (const kw of g.keywords) {
@@ -896,6 +910,13 @@ function runStats(runId) {
     visibility: (visSum / total) * 100,       // % от максимально возможной видимости
     traffic: freqKnown ? Math.round(traffic) : null, // прогноз визитов/мес
   };
+}
+
+function runStats(runId) { return gridRunStats(S.grid, runId); }
+
+function regionProjects() {
+  return window.SerpDeskInsights.sameDomainProjects(S.projects, activeProject())
+    .filter((project) => project.cfg?.[S.engine]?.enabled);
 }
 
 function renderCards() {
@@ -939,6 +960,7 @@ function renderCards() {
   return `<div class="cards">
     <div class="card"><div class="c-label">Фраз</div><div class="c-value">${g.keywords.length}</div></div>
     <div class="card"><div class="c-label">ТОП-3</div><div class="c-value">${cur.top3}${pv ? delta(cur.top3, pv.top3) : ''}</div></div>
+    <div class="card"><div class="c-label">ТОП-5</div><div class="c-value">${cur.top5}${pv ? delta(cur.top5, pv.top5) : ''}</div></div>
     <div class="card"><div class="c-label">ТОП-10</div><div class="c-value">${cur.top10}${pv ? delta(cur.top10, pv.top10) : ''}</div></div>
     <div class="card"><div class="c-label">ТОП-${activeProject().cfg.depth}</div><div class="c-value">${cur.topAll}${pv ? delta(cur.topAll, pv.topAll) : ''}</div></div>
     <div class="card" title="Средняя по найденным фразам; дельта — только по фразам, найденным в обоих прогонах"><div class="c-label">Средняя позиция</div><div class="c-value">${cur.avg ? cur.avg.toFixed(1) : '—'}${avgDelta}</div></div>
@@ -1215,6 +1237,10 @@ function renderDynamics() {
         ${[[3, '--green'], [5, '--green-soft'], [10, '--yellow'], [30, '--orange']].map(([n]) => `
           <button class="lg-btn ${S.dyn.tops[n] ? 'on' : ''}" data-top="${n}"><i class="lg-dot lg-t${n}"></i>ТОП-${n}</button>`).join('')}
       </div>` : ''}
+      <div class="dyn-tools">
+        <button class="btn" id="btnNotes">Заметки${g.notes?.length ? ` (${g.notes.length})` : ''}</button>
+        <span>Отмечайте изменения на сайте, релизы и апдейты поисковиков прямо на графике.</span>
+      </div>
       <div class="dyn-chart-box"><canvas id="dynCanvas" class="dyn-canvas"></canvas></div>
       ${renderDynInsights()}
       ${renderHistoryPager()}
@@ -1277,8 +1303,29 @@ function renderDynInsights() {
     }
   }
 
-  if (!potential && !mismatch) return '';
-  return `<div class="insights">${potential}${mismatch}</div>`;
+  let urls = '';
+  if (g.runs.length > 1) {
+    const currentRun = g.runs[g.runs.length - 1];
+    const previousRun = g.runs[g.runs.length - 2];
+    const rows = window.SerpDeskInsights.urlDynamics(g.keywords, g.cells, currentRun.id, previousRun.id);
+    const growing = rows.filter((row) => row.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 5);
+    const falling = rows.filter((row) => row.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 5);
+    const urlRows = (items, kind) => items.map((row) => `<tr>
+      <td title="${esc(row.url)}">${esc(normUrl(row.url))}</td>
+      <td>${row.keywords}</td><td>${row.current.toFixed(1)}%</td>
+      <td class="${kind === 'up' ? 'gain' : 'bad'}">${row.delta > 0 ? '+' : ''}${row.delta.toFixed(1)} п.п.</td>
+    </tr>`).join('');
+    if (growing.length || falling.length) urls = `<div class="insight">
+      <div class="insight-title">Динамика страниц <span class="insight-sub">— изменение видимости URL между двумя последними проверками</span></div>
+      <div class="url-dynamics-grid">
+        <div><b class="url-dyn-head d-up">Растут</b><table class="insight-tbl"><tr><th>Страница</th><th>Фраз</th><th>Сейчас</th><th>Δ</th></tr>${urlRows(growing, 'up') || '<tr><td colspan="4">—</td></tr>'}</table></div>
+        <div><b class="url-dyn-head d-down">Падают</b><table class="insight-tbl"><tr><th>Страница</th><th>Фраз</th><th>Сейчас</th><th>Δ</th></tr>${urlRows(falling, 'down') || '<tr><td colspan="4">—</td></tr>'}</table></div>
+      </div>
+    </div>`;
+  }
+
+  if (!potential && !mismatch && !urls) return '';
+  return `<div class="insights">${urls}${potential}${mismatch}</div>`;
 }
 
 function bindDynamicsEvents() {
@@ -1297,6 +1344,8 @@ function bindDynamicsEvents() {
       renderMain();
     };
   });
+  const notesButton = $('#btnNotes');
+  if (notesButton) notesButton.onclick = openNotesModal;
   drawDynamics();
   bindHistoryPager(main);
 }
@@ -1336,11 +1385,13 @@ function drawDynamics() {
   drawMultiLine(canvas, {
     xLabels: runs.map((r) => fmtDate(r.started_at)),
     series, yMax, yLabel, invert, pct,
+    notes: g.notes || [],
+    runDates: runs.map((r) => r.started_at),
   });
 }
 
 function drawMultiLine(canvas, opts) {
-  const { xLabels, series, yMax, yLabel, invert, pct } = opts;
+  const { xLabels, series, yMax, yLabel, invert, pct, notes = [], runDates = [] } = opts;
   const cssW = Math.max(640, (canvas.parentElement.clientWidth || 720) - 4), cssH = 340;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -1389,6 +1440,183 @@ function drawMultiLine(canvas, opts) {
       ctx.beginPath(); ctx.arc(x(i), y(v), 3, 0, Math.PI * 2); ctx.fill();
     });
   }
+
+  if (notes.length && runDates.length) {
+    const times = runDates.map((value) => new Date(value).getTime());
+    const minTime = Math.min(...times), maxTime = Math.max(...times);
+    ctx.save();
+    ctx.font = '10px -apple-system, Segoe UI, sans-serif';
+    for (const note of notes) {
+      const time = new Date(`${note.note_date}T12:00:00`).getTime();
+      if (!Number.isFinite(time) || time < minTime - 86400000 || time > maxTime + 86400000) continue;
+      const ratio = maxTime === minTime ? 0.5 : Math.min(1, Math.max(0, (time - minTime) / (maxTime - minTime)));
+      const nx = padL + ratio * plotW;
+      ctx.strokeStyle = note.category === 'search' ? col('--orange') : note.category === 'release' ? col('--green-soft') : col('--accent-h');
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(nx, padT); ctx.lineTo(nx, padT + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath(); ctx.arc(nx, padT + 7, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillText(String(note.title || '').slice(0, 22), Math.min(nx + 5, cssW - 145), padT + 11);
+    }
+    ctx.restore();
+  }
+}
+
+async function openNotesModal() {
+  const notes = (S.grid?.notes || []).slice().reverse();
+  const today = new Date().toISOString().slice(0, 10);
+  const categoryName = { change: 'Изменение на сайте', release: 'Релиз', search: 'Апдейт поисковика', other: 'Другое' };
+  const renderRows = () => notes.map((note) => `<div class="note-row">
+    <div><b>${esc(note.title)}</b><span>${esc(note.note_date)} · ${esc(categoryName[note.category] || 'Другое')}</span>${note.body ? `<small>${esc(note.body)}</small>` : ''}</div>
+    <button class="icon-btn note-delete" data-id="${note.id}" title="Удалить заметку">✕</button>
+  </div>`).join('') || '<div class="note-empty">Заметок пока нет.</div>';
+  const m = openModal(`
+    <div class="modal-head"><h2>Заметки на графике</h2><button class="icon-btn" id="mClose">✕</button></div>
+    <div class="modal-body">
+      <div class="row2">
+        <div class="field"><label>Дата</label><input id="noteDate" type="date" value="${today}"></div>
+        <div class="field"><label>Тип</label><select id="noteCategory">
+          <option value="change">Изменение на сайте</option><option value="release">Релиз</option>
+          <option value="search">Апдейт поисковика</option><option value="other">Другое</option>
+        </select></div>
+      </div>
+      <div class="field"><label>Что произошло</label><input id="noteTitle" maxlength="160" placeholder="Например: обновили каталог"></div>
+      <div class="field"><label>Комментарий (необязательно)</label><textarea id="noteBody" rows="3" placeholder="Что именно поменяли"></textarea></div>
+      <div class="note-list">${renderRows()}</div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="mCancel">Закрыть</button><button class="btn btn-primary" id="noteSave">Добавить</button></div>`);
+  $('#mClose', m).onclick = closeModal;
+  $('#mCancel', m).onclick = closeModal;
+  $('#noteSave', m).onclick = async () => {
+    try {
+      await window.api.addNote({
+        projectId: S.activeId,
+        date: $('#noteDate', m).value,
+        title: $('#noteTitle', m).value,
+        body: $('#noteBody', m).value,
+        category: $('#noteCategory', m).value,
+      });
+      closeModal();
+      await loadGrid();
+      renderMain();
+      openNotesModal();
+    } catch (error) { toast(error.message.replace(/^.*Error: /, ''), 'err'); }
+  };
+  m.querySelectorAll('.note-delete').forEach((button) => {
+    button.onclick = async () => {
+      if (!confirm('Удалить эту заметку?')) return;
+      await window.api.deleteNote({ projectId: S.activeId, id: Number(button.dataset.id) });
+      closeModal();
+      await loadGrid();
+      renderMain();
+      openNotesModal();
+    };
+  });
+}
+
+/* ============ вид «Регионы β» ============ */
+
+function projectRegionLabel(project) {
+  if (S.engine === 'yandex') return project.cfg?.yandex?.lr ? `lr ${project.cfg.yandex.lr}` : 'без региона';
+  return project.cfg?.google?.loc || project.cfg?.google?.country || 'без региона';
+}
+
+async function loadRegionsData() {
+  const projects = regionProjects();
+  S.regions.loading = true;
+  S.regions.error = null;
+  try {
+    const rows = await Promise.all(projects.map(async (project) => ({
+      project,
+      grid: project.id === S.activeId
+        ? S.grid
+        : await window.api.getGrid({ projectId: project.id, engine: S.engine, device: S.device, limit: 60 }),
+    })));
+    S.regions.data = rows;
+  } catch (error) {
+    S.regions.data = null;
+    S.regions.error = error.message.replace(/^.*Error: /, '');
+  } finally {
+    S.regions.loading = false;
+  }
+}
+
+function renderRegions() {
+  if (S.regions.loading) return '<div class="empty"><div class="e-title">Собираю сравнение регионов…</div></div>';
+  if (S.regions.error) return `<div class="empty"><div class="e-title">Не удалось собрать сравнение</div><div class="e-sub">${esc(S.regions.error)}</div><button class="btn" id="btnReloadRegions">Повторить</button></div>`;
+  const data = S.regions.data;
+  if (!data || data.length < 2) return `<div class="empty"><div class="e-title">Нужно два проекта одного домена</div><div class="e-sub">Создайте копию проекта для другого региона. Вкладка сравнит их позиции, ТОП-10 и видимость.</div></div>`;
+  const commonPhrases = commonRegionPhrases(data);
+  if (!commonPhrases.size) return `<div class="empty"><div class="e-title">Нет общих запросов</div><div class="e-sub">Сравнение строится только по одинаковым фразам в проектах, чтобы разные наборы запросов не искажали результат.</div></div>`;
+  const metric = S.regions.metric;
+  return `<div class="regions-wrap">
+    <div class="beta-notice"><b>Сравнение регионов β.</b> Сопоставляются ${commonPhrases.size} общих запросов в проектах домена ${esc(activeProject().domain)}. Разные наборы фраз не искажают график.</div>
+    <div class="dyn-tabs">
+      <button class="dyn-tab ${metric === 'avg' ? 'active' : ''}" data-region-metric="avg">Средняя позиция</button>
+      <button class="dyn-tab ${metric === 'top10' ? 'active' : ''}" data-region-metric="top10">Фразы в ТОП-10</button>
+      <button class="dyn-tab ${metric === 'visibility' ? 'active' : ''}" data-region-metric="visibility">Видимость</button>
+    </div>
+    <div class="region-legend">${data.map((row, index) => `<span class="region-pill"><i style="background:${regionColor(index)}"></i>${esc(row.project.name)} · ${esc(projectRegionLabel(row.project))}</span>`).join('')}</div>
+    <div class="dyn-chart-box"><canvas id="regionCanvas" class="dyn-canvas"></canvas></div>
+  </div>`;
+}
+
+function regionColor(index) {
+  return ['#4f8cff', '#56d364', '#e3b341', '#f0883e', '#bc8cff', '#58c7da'][index % 6];
+}
+
+function commonRegionPhrases(data) {
+  const sets = data.map((row) => new Set(row.grid.keywords.map((keyword) => String(keyword.phrase || '').trim().toLowerCase())));
+  if (!sets.length) return new Set();
+  return new Set([...sets[0]].filter((phrase) => sets.every((set) => set.has(phrase))));
+}
+
+function drawRegions() {
+  const canvas = $('#regionCanvas');
+  const data = S.regions.data;
+  if (!canvas || !data?.length) return;
+  const commonPhrases = commonRegionPhrases(data);
+  const days = [...new Set(data.flatMap((row) => row.grid.runs.map((run) => run.started_at.slice(0, 10))))].sort();
+  const metric = S.regions.metric;
+  const series = data.map((row, index) => {
+    const comparableGrid = {
+      ...row.grid,
+      keywords: row.grid.keywords.filter((keyword) => commonPhrases.has(String(keyword.phrase || '').trim().toLowerCase())),
+    };
+    const byDay = new Map();
+    for (const run of comparableGrid.runs) byDay.set(run.started_at.slice(0, 10), gridRunStats(comparableGrid, run.id));
+    return {
+      label: row.project.name,
+      color: regionColor(index),
+      points: days.map((day) => {
+        const stats = byDay.get(day);
+        if (!stats) return null;
+        if (metric === 'top10') return (stats.top10 / Math.max(1, comparableGrid.keywords.length)) * 100;
+        return stats[metric];
+      }),
+    };
+  });
+  const values = series.flatMap((item) => item.points).filter((value) => value != null && Number.isFinite(value));
+  const pct = metric !== 'avg';
+  const yMax = pct ? 100 : Math.max(10, Math.ceil(Math.max(...values, 1) / 5) * 5);
+  drawMultiLine(canvas, {
+    xLabels: days.map((day) => fmtDate(`${day}T12:00:00`)),
+    series,
+    yMax,
+    yLabel: pct ? '%' : 'позиция',
+    invert: metric === 'avg',
+    pct,
+  });
+}
+
+function bindRegionEvents() {
+  document.querySelectorAll('[data-region-metric]').forEach((button) => {
+    button.onclick = () => { S.regions.metric = button.dataset.regionMetric; renderMain(); };
+  });
+  const reload = $('#btnReloadRegions');
+  if (reload) reload.onclick = async () => { await loadRegionsData(); renderMain(); };
+  drawRegions();
 }
 
 /* ============ вид «Сравнение» ============ */

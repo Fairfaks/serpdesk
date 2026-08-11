@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { analyzeChanges, summarizeImportant } = require('../lib/analytics');
+const { analyzeChanges, runMetrics, summarizeImportant } = require('../lib/analytics');
 const { applyPrices, estimateProjectRequests } = require('../lib/costs');
 const DB = require('../lib/db');
 
@@ -39,6 +39,7 @@ assert.strictEqual(analysis.changes.bigDrops.length, 1);
 assert.strictEqual(analysis.changes.urlChanged.length, 2);
 assert.ok(analysis.visibilityDelta < 0, 'частотная фраза должна заметно снизить видимость');
 assert.ok(summarizeImportant(analysis).includes('вышли из ТОП-10'));
+assert.strictEqual(runMetrics(keywords, cells, 10).top5, 2);
 
 const project = {
   cfg: {
@@ -62,11 +63,17 @@ assert.ok(yandexOnly.details.every((item) => item.engine === 'yandex'));
   try {
     const db = await DB.open(path.join(tempDir, 'test.sqlite'));
     assert.ok(db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'"));
+    assert.ok(db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='project_notes'"));
     db.run(
       `INSERT INTO request_log(project_id, kind, requests, started_at, status)
        VALUES(1, 'positions', 10, '2026-07-24T00:00:00', 'done')`
     );
     assert.strictEqual(db.get('SELECT requests FROM request_log').requests, 10);
+    db.run(
+      `INSERT INTO project_notes(project_id, note_date, title, category, created_at)
+       VALUES(1, '2026-07-24', 'Обновили каталог', 'change', '2026-07-24T00:00:00')`
+    );
+    assert.strictEqual(db.get('SELECT title FROM project_notes').title, 'Обновили каталог');
     db.flush();
     console.log('OK: аналитика, алерты и оценка стоимости работают');
   } finally {

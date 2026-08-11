@@ -1,14 +1,14 @@
 {
   "name": "serpdesk",
   "productName": "SerpDesk",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "description": "Съёмщик позиций Яндекс/Google через XMLRiver API",
   "main": "main.js",
   "author": "Fairf",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test/parse.test.js && node test/import-history.test.js && node test/analytics-costs.test.js && node test/virtual-grid.test.js && node test/keyword-search.test.js && node test/backups.test.js && node test/diagnostics.test.js && node test/project-copy.test.js",
+    "test": "node test/parse.test.js && node test/import-history.test.js && node test/analytics-costs.test.js && node test/analytics-insights.test.js && node test/virtual-grid.test.js && node test/keyword-search.test.js && node test/backups.test.js && node test/diagnostics.test.js && node test/project-copy.test.js",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist": "electron-builder --mac --win",

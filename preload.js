@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   copyText: invoke('clipboard:write'),
   setKeywordTarget: invoke('keywords:set-target'),
   collectFreq: invoke('keywords:collect-freq'),
+  addNote: invoke('notes:add'),
+  deleteNote: invoke('notes:delete'),
   pickImportFile: invoke('history:pick-file'),
   importHistory: invoke('history:import'),
   getGrid: invoke('grid:get'),
